@@ -294,3 +294,19 @@ CREATE TABLE IF NOT EXISTS rejection_pairs
 CREATE INDEX IF NOT EXISTS idx_rejection_pairs_org_id_p1 ON rejection_pairs (org_id, profile_id_1);
 CREATE INDEX IF NOT EXISTS idx_rejection_pairs_org_id_p2 ON rejection_pairs (org_id, profile_id_2);
 
+-- Transformation PoC: one row per organization's mapping and the MI endpoint that runs it.
+CREATE TABLE IF NOT EXISTS transformations
+(
+    transformation_id VARCHAR(255) PRIMARY KEY,
+    org_id            VARCHAR(255) NOT NULL,
+    name              VARCHAR(255) NOT NULL,
+    mapping           TEXT         NOT NULL,
+    template          TEXT,
+    version           VARCHAR(50),
+    mi_url            VARCHAR(1024),
+    status            VARCHAR(50),
+    error             TEXT,
+    created_at        TEXT,
+    updated_at        TEXT,
+    UNIQUE (org_id, name)
+);

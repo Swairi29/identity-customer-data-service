@@ -19,10 +19,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,6 +47,7 @@ import (
 	errors2 "github.com/wso2/identity-customer-data-service/internal/system/errors"
 	"github.com/wso2/identity-customer-data-service/internal/system/log"
 	"github.com/wso2/identity-customer-data-service/internal/system/utils"
+	transformationService "github.com/wso2/identity-customer-data-service/internal/transformation/service"
 )
 
 type ProfileHandler struct {
@@ -124,8 +128,8 @@ func (ph *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 		isSystemApp,
 		filterParams,
 	)
-
-	if !isSystemApp {
+	// Transformation PoC: with no caller identity, show the full profile instead of filtering by consent.
+	if !isSystemApp && os.Getenv("CDS_POC_SKIP_AUTH") != "true" {
 		consentIds := parseCommaSeparatedOrRepeated(r.URL.Query()["consentCategoryId"])
 		filtered, filterErr := profileService.FilterProfileByConsent(ctx, *profile, profileId, org.ID, consentIds)
 		if filterErr != nil {
@@ -133,6 +137,29 @@ func (ph *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		profile = &filtered
+	}
+
+	// Transformation PoC: ?transformation=<name> returns the profile in that source
+	// system's own format, using the reverse of its mapping.
+	if name := r.URL.Query().Get("transformation"); name != "" {
+		profileJSON, err := json.Marshal(profile)
+		if err == nil {
+			var converted []byte
+			converted, err = transformationService.ApplyReverse(ctx, utils.ExtractOrgHandleFromPath(r), name,
+				profileJSON)
+			if err == nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(converted)
+				return
+			}
+		}
+		utils.HandleError(w, errors2.NewClientError(errors2.ErrorMessage{
+			Code:        errors2.GET_PROFILE.Code,
+			Message:     errors2.GET_PROFILE.Message,
+			Description: "reverse transformation failed: " + err.Error(),
+		}, http.StatusBadGateway))
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -626,8 +653,33 @@ func (ph *ProfileHandler) InitProfile(w http.ResponseWriter, r *http.Request) {
 	profilesProvider := provider.NewProfilesProvider()
 	profilesService := profilesProvider.GetProfilesService()
 
+	// Transformation PoC: when the organization has an active transformation, the body is the
+	// source system's own payload. MI converts it to the CDS format before it is decoded.
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		utils.HandleError(w, errors2.NewClientError(errors2.ErrorMessage{
+			Code:        errors2.ADD_PROFILE.Code,
+			Message:     errors2.ADD_PROFILE.Message,
+			Description: "could not read the request body",
+		}, http.StatusBadRequest))
+		return
+	}
+	body, applied, err := transformationService.ApplyForProfile(ctx, utils.ExtractOrgHandleFromPath(r),
+		r.URL.Query().Get("transformation"), rawBody)
+	if err != nil {
+		utils.HandleError(w, errors2.NewClientError(errors2.ErrorMessage{
+			Code:        errors2.ADD_PROFILE.Code,
+			Message:     errors2.ADD_PROFILE.Message,
+			Description: "transformation failed: " + err.Error(),
+		}, http.StatusBadGateway))
+		return
+	}
+	if applied {
+		log.GetLogger().Info("Transformation applied to profile request: " + string(body))
+	}
+
 	var profile model.ProfileRequest
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	err = decoder.Decode(&profile)
 

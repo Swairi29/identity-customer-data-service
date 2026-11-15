@@ -22,6 +22,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/wso2/identity-customer-data-service/internal/system/authn"
@@ -87,6 +88,11 @@ func validateAdminCredentials(token string) (bool, error) {
 // AuthnAndAuthz performs authentication and authorization for the given HTTP request and operation.
 // In a sub organization, the `org:` form of the operation is authorized.
 func AuthnAndAuthz(r *http.Request, operation string) error {
+
+	// Transformation PoC: CDS_POC_SKIP_AUTH=true skips authentication for local testing only.
+	if os.Getenv("CDS_POC_SKIP_AUTH") == "true" {
+		return nil
+	}
 
 	claims, err := authenticate(r)
 	if err != nil {
