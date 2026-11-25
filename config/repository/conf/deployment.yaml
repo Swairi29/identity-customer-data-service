@@ -146,6 +146,14 @@ auth_server:
       - "internal_cds_consent_category_update"
     consent_category:delete:
       - "internal_cds_consent_category_delete"
+    source:view:
+      - "internal_cds_source_view"
+    source:create:
+      - "internal_cds_source_create"
+    source:update:
+      - "internal_cds_source_update"
+    source:delete:
+      - "internal_cds_source_delete"
     identity_resolution:view:
       - "internal_cds_identity_resolution_view"
     identity_resolution:update:
@@ -173,6 +181,9 @@ auth_server:
 
     org:consent_category:view:
       - "internal_org_cds_consent_category_view"
+
+    org:source:view:
+      - "internal_org_cds_source_view"
 
     org:identity_resolution:view:
       - "internal_org_cds_identity_resolution_view"

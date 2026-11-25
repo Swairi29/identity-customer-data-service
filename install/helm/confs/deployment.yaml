@@ -96,6 +96,15 @@ auth_server:
     identity_resolution:update:
       - "internal_cds_identity_resolution_update"
 
+    source:view:
+      - "internal_cds_source_view"
+    source:create:
+      - "internal_cds_source_create"
+    source:update:
+      - "internal_cds_source_update"
+    source:delete:
+      - "internal_cds_source_delete"
+
     org:profile:create:
       - "internal_org_cds_profile_create"
     org:profile:update:
@@ -118,6 +127,9 @@ auth_server:
 
     org:consent_category:view:
       - "internal_org_cds_consent_category_view"
+
+    org:source:view:
+      - "internal_org_cds_source_view"
 
     org:identity_resolution:view:
       - "internal_org_cds_identity_resolution_view"

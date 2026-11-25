@@ -9,6 +9,7 @@ info:
     - Configure the unification rules that decide when two profiles belong to the same person.
     - Review and resolve the profile merges that identity resolution held back.
     - Manage consent categories and the attributes each category covers.
+    - Register and manage the data sources of an organization.
     - Configure the service for an organization.
     - Share schema attributes and unification rules with child organizations, and select which
       child organizations can use the service.
@@ -1388,6 +1389,160 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /sources:
+    post:
+      tags: [Sources]
+      summary: Add a source
+      description: |
+        Registers a data source for the organization. CDS generates `source_id` as a UUID and
+        sets `created_at` and `updated_at`. Fields that are not part of the request schema,
+        including `source_id`, are rejected with a 400.
+
+        The call returns a 400 when:
+        - `name` is missing, empty after trimming, or longer than 255 characters
+        - `icon_url` is missing, is not an absolute `https` URL, or is longer than 2048 characters
+        - `description` is longer than 1024 characters
+
+        A `name` that another source of the organization already uses gives a 409.
+
+        <br><b>Scope required:</b> `source:create`
+      operationId: addSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceRequest'
+      responses:
+        '201':
+          description: Source added
+          headers:
+            Location:
+              description: URL of the new source, `.../sources/{sourceId}`.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/SourceConflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [Sources]
+      summary: Get all sources
+      description: |
+        The sources of the organization, newest first. The response is a plain array, without
+        pagination; an organization with no sources gets an empty array.
+
+        <br><b>Scope required:</b> `source:view`
+      operationId: getAllSources
+      responses:
+        '200':
+          description: Sources retrieved
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Source'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /sources/{sourceId}:
+    parameters:
+      - $ref: '#/components/parameters/SourceId'
+    get:
+      tags: [Sources]
+      summary: Get source by ID
+      description: |
+        A `sourceId` that is not a UUID gives a 400.
+
+        <br><b>Scope required:</b> `source:view`
+      operationId: getSource
+      responses:
+        '200':
+          description: Source retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SourceNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags: [Sources]
+      summary: Update source description
+      description: |
+        Only `description` can change. `name`, `icon_url`, `source_id` and any other field are
+        rejected with a 400, as is an empty body. `updated_at` is set to the time of the call.
+
+        <br><b>Scope required:</b> `source:update`
+      operationId: patchSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourcePatch'
+      responses:
+        '200':
+          description: Source updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/SourceNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    delete:
+      tags: [Sources]
+      summary: Delete source
+      description: |
+        The call is idempotent: deleting a source that does not exist also returns a 204. A
+        `sourceId` that is not a UUID gives a 400.
+
+        <br><b>Scope required:</b> `source:delete`
+      operationId: deleteSource
+      responses:
+        '204':
+          description: Source deleted, or it did not exist.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /config:
     get:
       tags: [Admin Config]
@@ -1881,6 +2036,15 @@ components:
       required: true
       schema:
         type: string
+    SourceId:
+      name: sourceId
+      in: path
+      required: true
+      description: The `source_id` CDS generated when the source was added.
+      schema:
+        type: string
+        format: uuid
+      example: 3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90
     RuleId:
       name: ruleId
       in: path
@@ -1923,6 +2087,26 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ServerError'
+    SourceNotFound:
+      description: Not Found. The organization has no source with this ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: CDS-18006
+            message: Source not found.
+            description: No source with ID '3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90' exists in organization 'carbon.super'.
+    SourceConflict:
+      description: Conflict. Another source of the organization already uses this name.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: CDS-18007
+            message: Source already exists.
+            description: A source named 'Mobile App' already exists in this organization.
     ProfileNotFound:
       description: Not Found. The profile does not exist.
       content:
@@ -2440,6 +2624,82 @@ components:
           type: string
           readOnly: true
           description: Schema attribute ID. Derived from the profile schema, never sent.
+
+    SourceRequest:
+      type: object
+      additionalProperties: false
+      description: The body of `POST /sources`. Fields that are not listed here are rejected.
+      required:
+        - name
+        - icon_url
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Display name of the source, unique within the organization.
+          example: Mobile App
+        description:
+          type: string
+          maxLength: 1024
+          description: What the source is and what data it sends.
+          example: Events from the iOS and Android apps
+        icon_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Absolute `https` URL of the icon shown for the source.
+          example: https://cdn.example.com/icons/mobile.png
+
+    SourcePatch:
+      type: object
+      additionalProperties: false
+      description: The body of `PATCH /sources/{sourceId}`. Only `description` can change.
+      required:
+        - description
+      properties:
+        description:
+          type: string
+          maxLength: 1024
+          example: Events from the mobile apps and the wearable
+
+    Source:
+      type: object
+      required:
+        - source_id
+        - name
+        - description
+        - icon_url
+        - created_at
+        - updated_at
+      properties:
+        source_id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Identifier CDS generated when the source was added.
+          example: 3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90
+        name:
+          type: string
+          example: Mobile App
+        description:
+          type: string
+          description: Empty when none was given.
+          example: Events from the iOS and Android apps
+        icon_url:
+          type: string
+          format: uri
+          example: https://cdn.example.com/icons/mobile.png
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2026-11-25T06:00:00Z'
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: '2026-11-25T06:00:00Z'
 
     ConsentCategoryRequest:
       type: object
