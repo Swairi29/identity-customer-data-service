@@ -17,7 +17,7 @@
  */
 
 // Package service holds the logic of the transformation PoC: it turns mapping
-// rules into an MI template, deploys it to MI through deploy.sh, and forwards
+// rules into an MI template, deploys it to MI through its Management API (mi_deployer.go), and forwards
 // payloads to the deployed MI endpoint.
 package service
 
@@ -29,9 +29,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -159,45 +156,22 @@ func Transform(ctx context.Context, orgId, id string, payload []byte) (int, []by
 	return callMI(ctx, t.MIUrl, payload)
 }
 
-// ApplyForProfile is called by profile creation. It finds the organization's
-// transformation and, when there is one, returns the payload converted by MI
-// (applied = true). With no transformation it returns the payload unchanged, so
-// sources that already send the CDS format keep working.
-//
-// name picks the transformation when the organization has several (the
-// ?transformation= query parameter); empty name uses the only active one.
+// ApplyForProfile is called by profile creation. name is the transformation to
+// apply: from ?transformation=<name>, or the one linked to ?source=<id> (PoC V2).
+// It returns the payload converted by MI (applied = true). With an empty name
+// it returns the payload unchanged (applied = false), so callers that already
+// send the CDS format keep working exactly as before.
 func ApplyForProfile(ctx context.Context, orgId, name string, payload []byte) ([]byte, bool, error) {
 
-	var t *model.Transformation
-	if name != "" {
-		found, err := store.GetByName(ctx, orgId, name)
-		if err != nil {
-			return nil, false, err
-		}
-		if found == nil {
-			return nil, false, fmt.Errorf("%w: no transformation named '%s'", ErrNotFound, name)
-		}
-		t = found
-	} else {
-		list, err := store.List(ctx, orgId)
-		if err != nil {
-			return nil, false, err
-		}
-		var active []model.Transformation
-		for _, candidate := range list {
-			if candidate.Status == model.StatusActive {
-				active = append(active, candidate)
-			}
-		}
-		switch len(active) {
-		case 0:
-			return payload, false, nil
-		case 1:
-			t = &active[0]
-		default:
-			return nil, false, fmt.Errorf("%w: organization has %d active transformations; "+
-				"choose one with ?transformation=<name>", ErrBadRequest, len(active))
-		}
+	if name == "" {
+		return payload, false, nil
+	}
+	t, err := store.GetByName(ctx, orgId, name)
+	if err != nil {
+		return nil, false, err
+	}
+	if t == nil {
+		return nil, false, fmt.Errorf("%w: no transformation named '%s'", ErrNotFound, name)
 	}
 	if t.Status != model.StatusActive || t.MIUrl == "" {
 		return nil, false, fmt.Errorf("%w: '%s' status is %s", ErrNotActive, t.Name, t.Status)
@@ -345,43 +319,21 @@ func reverseRules(rules []model.MappingRule) []model.MappingRule {
 	return reversed
 }
 
-// runDeploy runs deploy.sh for one MI endpoint and returns the URL MI reports.
+// runDeploy deploys one MI endpoint and returns the URL MI reports. Part M:
+// it calls MI's Management API from Go (mi_deployer.go) instead of running
+// ~/transformer-poc/deploy.sh, so CDS needs nothing outside the repository.
 func runDeploy(ctx context.Context, orgId, name, version, template, oldVersion string) (string, error) {
 
 	logger := log.GetLogger()
-	script := deployScript()
-
-	templateFile, err := os.CreateTemp("", "cds-template-*.json")
-	if err != nil {
-		return "", fmt.Errorf("creating template file: %w", err)
-	}
-	defer os.Remove(templateFile.Name())
-	if _, err := templateFile.WriteString(template); err != nil {
-		templateFile.Close()
-		return "", fmt.Errorf("writing template file: %w", err)
-	}
-	templateFile.Close()
-
-	args := []string{script, miOrg(orgId), name, version, templateFile.Name()}
-	if oldVersion != "" {
-		args = append(args, oldVersion)
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	deployCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, "bash", args...)
-	cmd.Dir = filepath.Dir(script)
-	output, err := cmd.CombinedOutput()
-	logger.Info(fmt.Sprintf("deploy.sh for '%s' version %s:\n%s", name, version, output))
 
-	url := lastURL(string(output))
-	if err != nil || url == "" {
-		reason := strings.TrimSpace(string(output))
-		if err != nil {
-			reason = err.Error() + ": " + reason
-		}
-		return "", errors.New(tail(reason, 500))
+	url, err := deployToMI(deployCtx, miConfigFromEnv(), miOrg(orgId), name, version, template, oldVersion)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Deploying '%s' version %s to MI failed: %s", name, version, err.Error()))
+		return "", errors.New(tail(err.Error(), 500))
 	}
+	logger.Info(fmt.Sprintf("Deployed '%s' version %s to MI: %s", name, version, url))
 	return url, nil
 }
 
@@ -390,31 +342,9 @@ func markFailed(t *model.Transformation, reason string) {
 	t.Error = reason
 }
 
-// deployScript is the path of deploy.sh, from TRANSFORMER_DEPLOY_SCRIPT or
-// ~/transformer-poc/deploy.sh.
-func deployScript() string {
-	if path := os.Getenv("TRANSFORMER_DEPLOY_SCRIPT"); path != "" {
-		return path
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "transformer-poc", "deploy.sh")
-}
-
 // miOrg makes an organization handle safe for MI names and paths (carbon.super -> carbon-super).
 func miOrg(orgId string) string {
 	return nonAlnum.ReplaceAllString(orgId, "-")
-}
-
-// lastURL returns the last line of the script output that is an MI URL.
-func lastURL(output string) string {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
-			return line
-		}
-	}
-	return ""
 }
 
 // nextVersion bumps the last part of a version: 1.0.3 -> 1.0.4.

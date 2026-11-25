@@ -310,3 +310,54 @@ CREATE TABLE IF NOT EXISTS transformations
     updated_at        TEXT,
     UNIQUE (org_id, name)
 );
+
+-- PoC V2: sources (customer apps), destinations, their links, and the delivery log.
+CREATE TABLE IF NOT EXISTS sources
+(
+    source_id         VARCHAR(255) PRIMARY KEY,
+    org_id            VARCHAR(255) NOT NULL,
+    name              VARCHAR(255) NOT NULL,
+    description       TEXT,
+    transformation_id VARCHAR(255),
+    created_at        TEXT,
+    updated_at        TEXT,
+    UNIQUE (org_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS destinations
+(
+    destination_id VARCHAR(255) PRIMARY KEY,
+    org_id         VARCHAR(255) NOT NULL,
+    name           VARCHAR(255) NOT NULL,
+    type           VARCHAR(50)  NOT NULL,
+    url            VARCHAR(1024) NOT NULL,
+    auth_type      VARCHAR(50)  NOT NULL DEFAULT 'NONE',
+    auth_header    VARCHAR(255),
+    auth_value     TEXT,
+    created_at     TEXT,
+    updated_at     TEXT,
+    UNIQUE (org_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS source_destinations
+(
+    source_id      VARCHAR(255) NOT NULL,
+    destination_id VARCHAR(255) NOT NULL,
+    PRIMARY KEY (source_id, destination_id)
+);
+
+CREATE TABLE IF NOT EXISTS deliveries
+(
+    delivery_id      VARCHAR(255) PRIMARY KEY,
+    org_id           VARCHAR(255) NOT NULL,
+    source_id        VARCHAR(255) NOT NULL,
+    destination_id   VARCHAR(255) NOT NULL,
+    destination_name VARCHAR(255),
+    destination_type VARCHAR(50),
+    profile_id       VARCHAR(255) NOT NULL,
+    status           VARCHAR(50)  NOT NULL,
+    http_status      INTEGER,
+    error            TEXT,
+    created_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_deliveries_org_id ON deliveries (org_id);

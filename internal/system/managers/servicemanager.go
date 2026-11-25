@@ -60,6 +60,7 @@ func (sm *ServiceManager) RegisterServices() error {
 	_ = services.NewAdminConfigService(routesMux)
 	_ = services.NewIdentityResolutionService(routesMux)
 	_ = services.NewTransformationService(routesMux) // transformation PoC
+	_ = services.NewIntegrationService(routesMux)    // PoC V2: sources, destinations, deliveries
 	if config.OrganizationManagementEnabled() {
 		_ = services.NewOrganizationService(routesMux)
 	}

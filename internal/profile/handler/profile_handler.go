@@ -38,6 +38,8 @@ import (
 	"github.com/wso2/identity-customer-data-service/internal/system/pagination"
 	"github.com/wso2/identity-customer-data-service/internal/system/security"
 
+	integrationModel "github.com/wso2/identity-customer-data-service/internal/integration/model"
+	integrationService "github.com/wso2/identity-customer-data-service/internal/integration/service"
 	orgService "github.com/wso2/identity-customer-data-service/internal/organization/service"
 	"github.com/wso2/identity-customer-data-service/internal/profile/model"
 	"github.com/wso2/identity-customer-data-service/internal/profile/provider"
@@ -140,8 +142,18 @@ func (ph *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transformation PoC: ?transformation=<name> returns the profile in that source
-	// system's own format, using the reverse of its mapping.
-	if name := r.URL.Query().Get("transformation"); name != "" {
+	// system's own format, using the reverse of its mapping. PoC V2: ?source=<id>
+	// does the same with the transformation linked to that source.
+	name := r.URL.Query().Get("transformation")
+	if sourceId := r.URL.Query().Get("source"); sourceId != "" {
+		_, sourceTransformation, sourceErr := resolveSource(ctx, utils.ExtractOrgHandleFromPath(r), sourceId)
+		if sourceErr != nil {
+			utils.HandleError(w, sourceErr)
+			return
+		}
+		name = sourceTransformation
+	}
+	if name != "" {
 		profileJSON, err := json.Marshal(profile)
 		if err == nil {
 			var converted []byte
@@ -664,8 +676,21 @@ func (ph *ProfileHandler) InitProfile(w http.ResponseWriter, r *http.Request) {
 		}, http.StatusBadRequest))
 		return
 	}
+	// PoC V2: ?source=<id> names a registered source app. CDS applies the transformation
+	// linked to it and, once the profile is stored, delivers it to the source's destinations.
+	// With neither ?source= nor ?transformation=, the body is used as is (CDS format).
+	transformationName := r.URL.Query().Get("transformation")
+	var source *integrationModel.Source
+	if sourceId := r.URL.Query().Get("source"); sourceId != "" {
+		resolved, linkedTransformation, sourceErr := resolveSource(ctx, utils.ExtractOrgHandleFromPath(r), sourceId)
+		if sourceErr != nil {
+			utils.HandleError(w, sourceErr)
+			return
+		}
+		source, transformationName = resolved, linkedTransformation
+	}
 	body, applied, err := transformationService.ApplyForProfile(ctx, utils.ExtractOrgHandleFromPath(r),
-		r.URL.Query().Get("transformation"), rawBody)
+		transformationName, rawBody)
 	if err != nil {
 		utils.HandleError(w, errors2.NewClientError(errors2.ErrorMessage{
 			Code:        errors2.ADD_PROFILE.Code,
@@ -693,9 +718,10 @@ func (ph *ProfileHandler) InitProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if a valid cookie exists
+	// Check if a valid cookie exists. PoC V2: a source app sends a new record every time,
+	// so the browser-cookie shortcut that returns an existing profile is skipped for it.
 	profileCookie, err := r.Cookie(constants.ProfileCookie)
-	if err == nil && profileCookie.Value != "" {
+	if err == nil && profileCookie.Value != "" && source == nil {
 		if ph.handleExistingCookie(w, r, org.ID, profileCookie.Value) {
 			return
 		}
@@ -730,6 +756,12 @@ func (ph *ProfileHandler) InitProfile(w http.ResponseWriter, r *http.Request) {
 		constants.ApiBasePath+"/v1",
 		profileResponse.ProfileId,
 	)
+
+	// PoC V2: send the stored profile to every destination linked to the source.
+	if source != nil {
+		sent, failed := integrationService.Deliver(ctx, source, profileResponse.ProfileId, profileResponse.Traits)
+		w.Header().Set("X-CDS-Deliveries", fmt.Sprintf("%d sent, %d failed", sent, failed))
+	}
 
 	w.Header().Set("Location", location)
 	utils.RespondJSON(w, http.StatusCreated, profileResponse, constants.ProfileResource)
