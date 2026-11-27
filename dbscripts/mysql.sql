@@ -104,6 +104,21 @@ CREATE TABLE IF NOT EXISTS consent_categories
     UNIQUE KEY uq_consent_categories_identifier (category_identifier)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
+-- The data sources an organization registers; see the PostgreSQL schema.
+CREATE TABLE IF NOT EXISTS sources
+(
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    source_id   VARCHAR(36)   NOT NULL,
+    org_id      VARCHAR(255)  NOT NULL,
+    name        VARCHAR(255)  NOT NULL,
+    description VARCHAR(1024),
+    icon_url    VARCHAR(2048) NOT NULL,
+    created_at  DATETIME(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at  DATETIME(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uq_sources_source_id (source_id),
+    UNIQUE KEY uq_sources_org_id_name (org_id, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
 CREATE TABLE IF NOT EXISTS consent_category_attributes
 (
     id                     INT AUTO_INCREMENT PRIMARY KEY,

@@ -120,6 +120,23 @@ CREATE TABLE dbo.consent_categories
 );
 END;
 
+-- The data sources an organization registers; see the PostgreSQL schema.
+IF OBJECT_ID(N'dbo.sources', N'U') IS NULL
+BEGIN
+CREATE TABLE dbo.sources
+(
+    id          INT IDENTITY(1,1) PRIMARY KEY,
+    source_id   NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NOT NULL UNIQUE,
+    org_id      NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    name        NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    description NVARCHAR(1024) COLLATE Latin1_General_100_BIN2,
+    icon_url    NVARCHAR(2048) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    created_at  DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at  DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT uq_sources_org_id_name UNIQUE (org_id, name)
+);
+END;
+
 IF OBJECT_ID(N'dbo.consent_category_attributes', N'U') IS NULL
 BEGIN
 CREATE TABLE dbo.consent_category_attributes

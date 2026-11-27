@@ -109,6 +109,20 @@ CREATE TABLE IF NOT EXISTS consent_categories
     org_id              VARCHAR(255)        NOT NULL
 );
 
+-- The data sources an organization registers; see the PostgreSQL schema.
+CREATE TABLE IF NOT EXISTS sources
+(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id   VARCHAR(36)   UNIQUE NOT NULL,
+    org_id      VARCHAR(255)  NOT NULL,
+    name        VARCHAR(255)  NOT NULL,
+    description VARCHAR(1024),
+    icon_url    VARCHAR(2048) NOT NULL,
+    created_at  TIMESTAMP     NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now') || '+00:00'),
+    updated_at  TIMESTAMP     NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now') || '+00:00'),
+    CONSTRAINT uq_sources_org_id_name UNIQUE (org_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS consent_category_attributes
 (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,

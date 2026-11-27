@@ -62,7 +62,7 @@ func tableCount(t *testing.T, db *sql.DB) int {
 }
 
 func Test_initializeSQLiteSchema(t *testing.T) {
-	const expectedTables = 20 // 14 core, 3 identity resolution, and 3 organization tables
+	const expectedTables = 21 // 15 core (including sources), 3 identity resolution, and 3 organization tables
 
 	db, path := openTestSQLite(t)
 
@@ -89,7 +89,7 @@ func Test_initializeSQLiteSchema(t *testing.T) {
 // Test_applySchemaStatements covers the fallback for drivers that reject a
 // multi-statement script.
 func Test_applySchemaStatements(t *testing.T) {
-	const expectedTables = 20 // 14 core, 3 identity resolution, and 3 organization tables
+	const expectedTables = 21 // 15 core (including sources), 3 identity resolution, and 3 organization tables
 
 	db, _ := openTestSQLite(t)
 
