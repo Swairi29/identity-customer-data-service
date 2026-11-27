@@ -621,31 +621,64 @@ var GetConsentCategoryAttributesByCategoryIDs = newQuery("CDS-CON-15",
 
 // InsertSource stores a new source.
 var InsertSource = newQuery("CDS-SRC-01",
-	`INSERT INTO sources (source_id, org_id, name, description, icon_url, created_at, updated_at)
-	 VALUES ($1, $2, $3, $4, $5, $6, $7)`)
+	`INSERT INTO sources (source_id, org_id, name, description, icon_url, transformation_id, created_at, updated_at)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
 
 // GetSourcesByOrg returns every source of an org, newest first.
 var GetSourcesByOrg = newQuery("CDS-SRC-02",
-	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	`SELECT source_id, org_id, name, description, icon_url, transformation_id, created_at, updated_at FROM sources
 	 WHERE org_id = $1 ORDER BY created_at DESC, id DESC`)
 
 // GetSourceByID returns the source of an org with the given ID.
 var GetSourceByID = newQuery("CDS-SRC-03",
-	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	`SELECT source_id, org_id, name, description, icon_url, transformation_id, created_at, updated_at FROM sources
 	 WHERE source_id = $1 AND org_id = $2`)
 
 // GetSourceByName returns the source of an org with the given name.
 var GetSourceByName = newQuery("CDS-SRC-04",
-	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	`SELECT source_id, org_id, name, description, icon_url, transformation_id, created_at, updated_at FROM sources
 	 WHERE name = $1 AND org_id = $2`)
 
-// UpdateSourceDescription replaces the description of a source. The other fields are not editable.
-var UpdateSourceDescription = newQuery("CDS-SRC-05",
-	`UPDATE sources SET description = $1, updated_at = $2 WHERE source_id = $3 AND org_id = $4`)
+// UpdateSource writes the editable fields of a source. name and icon_url are not editable.
+var UpdateSource = newQuery("CDS-SRC-05",
+	`UPDATE sources SET description = $1, transformation_id = $2, updated_at = $3
+	 WHERE source_id = $4 AND org_id = $5`)
 
 // DeleteSource removes the source of an org with the given ID.
 var DeleteSource = newQuery("CDS-SRC-06",
 	`DELETE FROM sources WHERE source_id = $1 AND org_id = $2`)
+
+// InsertSourceDestination links a source to a destination.
+var InsertSourceDestination = newQuery("CDS-SRC-07",
+	`INSERT INTO source_destinations (source_id, destination_id, org_id) VALUES ($1, $2, $3)`)
+
+// DeleteSourceDestinations removes every destination link of a source.
+var DeleteSourceDestinations = newQuery("CDS-SRC-08",
+	`DELETE FROM source_destinations WHERE source_id = $1 AND org_id = $2`)
+
+// GetSourceDestinations returns the destinations a source of an org is linked to.
+var GetSourceDestinations = newQuery("CDS-SRC-09",
+	`SELECT destination_id FROM source_destinations WHERE source_id = $1 AND org_id = $2`)
+
+// GetSourceDestinationsByOrg returns every destination link of the sources of an org.
+var GetSourceDestinationsByOrg = newQuery("CDS-SRC-10",
+	`SELECT source_id, destination_id FROM source_destinations WHERE org_id = $1`)
+
+// InsertAttributeChange appends one change to the attribute history of a profile.
+var InsertAttributeChange = newQuery("CDS-SRC-11",
+	`INSERT INTO profile_attribute_sources (change_id, profile_id, attribute_path, action, source_id,
+		source_name, org_id, changed_at)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+
+// GetAttributeChanges returns the attribute history of a profile of an org.
+var GetAttributeChanges = newQuery("CDS-SRC-12",
+	`SELECT change_id, profile_id, attribute_path, action, source_id, source_name, changed_at
+	 FROM profile_attribute_sources WHERE profile_id = $1 AND org_id = $2`)
+
+// GetAttributeChangesOfAttribute returns the history of one attribute of a profile of an org.
+var GetAttributeChangesOfAttribute = newQuery("CDS-SRC-13",
+	`SELECT change_id, profile_id, attribute_path, action, source_id, source_name, changed_at
+	 FROM profile_attribute_sources WHERE profile_id = $1 AND org_id = $2 AND attribute_path = $3`)
 
 // InsertCookie stores a new profile cookie.
 var InsertCookie = newQuery("CDS-CKI-01",
