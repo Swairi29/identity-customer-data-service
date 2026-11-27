@@ -138,6 +138,10 @@ linters:
       - path: internal/(consent/store/consent_category_store|profile/store/profile_store|system/queue/activemq/activemq)\.go
         linters:
           - dupl
+      # Every route service follows the same register-then-Route layout.
+      - path: internal/system/services/source_service\.go
+        linters:
+          - dupl
     paths:
       - third_party$
       - builtin$

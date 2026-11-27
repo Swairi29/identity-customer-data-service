@@ -139,6 +139,24 @@ func TestConsentCategoryRoutes(t *testing.T) {
 	})
 }
 
+func TestSourceRoutes(t *testing.T) {
+	setUp(t)
+	service := NewSourceService(http.NewServeMux())
+	router := tenantRouter(service.Route)
+
+	requireRoutesRequireAuthentication(t, router, []route{
+		{http.MethodGet, "/sources"},
+		{http.MethodPost, "/sources"},
+		{http.MethodGet, "/sources/3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90"},
+		{http.MethodPatch, "/sources/3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90"},
+		{http.MethodDelete, "/sources/3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90"},
+	})
+	// A delete needs the ID of the source; DELETE /sources is not routed.
+	assert.Equal(t, http.StatusMethodNotAllowed, send(router, http.MethodDelete, "/sources").Code)
+	assert.Equal(t, http.StatusMethodNotAllowed, send(router, http.MethodPut,
+		"/sources/3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90").Code)
+}
+
 func TestAdminConfigRoutes(t *testing.T) {
 	setUp(t)
 	service := NewAdminConfigService(http.NewServeMux())

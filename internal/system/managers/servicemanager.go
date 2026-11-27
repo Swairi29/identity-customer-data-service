@@ -59,6 +59,7 @@ func (sm *ServiceManager) RegisterServices() error {
 	_ = services.NewProfileSchemaService(routesMux)
 	_ = services.NewUnificationRulesService(routesMux)
 	_ = services.NewConsentCategoryService(routesMux)
+	_ = services.NewSourceService(routesMux)
 	_ = services.NewAdminConfigService(routesMux)
 	_ = services.NewIdentityResolutionService(routesMux)
 	_ = services.NewServiceCredentialsService(routesMux)

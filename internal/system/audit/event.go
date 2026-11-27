@@ -43,6 +43,7 @@ const (
 	TargetUnificationRule              = "unification_rule"
 	TargetUnificationRuleSharingPolicy = "unification_rule_sharing_policy"
 	TargetConsentCategory              = "consent_category"
+	TargetSource                       = "source"
 	TargetAdminConfig                  = "admin_config"
 	TargetReviewTask                   = "review_task"
 	TargetOrganization                 = "organization"
@@ -119,6 +120,11 @@ var (
 	ConsentCategoryCreate = Event{TargetType: TargetConsentCategory, Action: ActionCreate}
 	ConsentCategoryUpdate = Event{TargetType: TargetConsentCategory, Action: ActionUpdate, IDParam: "categoryId"}
 	ConsentCategoryDelete = Event{TargetType: TargetConsentCategory, Action: ActionDelete, IDParam: "categoryId"}
+
+	// Sources.
+	SourceCreate = Event{TargetType: TargetSource, Action: ActionCreate}
+	SourceUpdate = Event{TargetType: TargetSource, Action: ActionUpdate, IDParam: "sourceId"}
+	SourceDelete = Event{TargetType: TargetSource, Action: ActionDelete, IDParam: "sourceId"}
 
 	// Admin configuration.
 	AdminConfigUpdate = Event{TargetType: TargetAdminConfig, Action: ActionUpdate}
