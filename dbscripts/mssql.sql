@@ -131,10 +131,44 @@ CREATE TABLE dbo.sources
     name        NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
     description NVARCHAR(1024) COLLATE Latin1_General_100_BIN2,
     icon_url    NVARCHAR(2048) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    transformation_id NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NULL,
     created_at  DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at  DATETIME2(6) NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT uq_sources_org_id_name UNIQUE (org_id, name)
 );
+END;
+
+-- The destinations a source sends its profiles to. Removed with the source.
+IF OBJECT_ID(N'dbo.source_destinations', N'U') IS NULL
+BEGIN
+CREATE TABLE dbo.source_destinations
+(
+    source_id      NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NOT NULL REFERENCES dbo.sources (source_id) ON DELETE CASCADE,
+    destination_id NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    org_id         NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    CONSTRAINT pk_source_destinations PRIMARY KEY (source_id, destination_id)
+);
+CREATE INDEX idx_source_destinations_org_id ON dbo.source_destinations (org_id);
+END;
+
+-- The attribute history of each profile: one row per actual change to an attribute of identity_attributes or
+-- traits, appended and never updated. source_id is NULL for a change made without ?source=, and has no
+-- foreign key, so the history (and the source name it had) outlives a deleted source.
+IF OBJECT_ID(N'dbo.profile_attribute_sources', N'U') IS NULL
+BEGIN
+CREATE TABLE dbo.profile_attribute_sources
+(
+    change_id      NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NOT NULL PRIMARY KEY,
+    profile_id     NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NOT NULL REFERENCES dbo.profiles (profile_id) ON DELETE CASCADE,
+    attribute_path NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    action         NVARCHAR(10) COLLATE Latin1_General_100_BIN2 NOT NULL
+        CONSTRAINT chk_profile_attribute_sources_action CHECK (action IN ('SET', 'REMOVED', 'MERGED')),
+    source_id      NVARCHAR(36) COLLATE Latin1_General_100_BIN2 NULL,
+    source_name    NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NULL,
+    org_id         NVARCHAR(255) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    changed_at     DATETIME2(6) NOT NULL
+);
+CREATE INDEX idx_profile_attribute_sources_attribute ON dbo.profile_attribute_sources (profile_id, attribute_path, changed_at DESC);
 END;
 
 IF OBJECT_ID(N'dbo.consent_category_attributes', N'U') IS NULL

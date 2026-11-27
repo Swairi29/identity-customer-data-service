@@ -113,10 +113,42 @@ CREATE TABLE IF NOT EXISTS sources
     name        VARCHAR(255)  NOT NULL,
     description VARCHAR(1024),
     icon_url    VARCHAR(2048) NOT NULL,
+    transformation_id VARCHAR(36),
     created_at  DATETIME(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at  DATETIME(6)   NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     UNIQUE KEY uq_sources_source_id (source_id),
     UNIQUE KEY uq_sources_org_id_name (org_id, name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+-- The destinations a source sends its profiles to. Removed with the source.
+CREATE TABLE IF NOT EXISTS source_destinations
+(
+    source_id      VARCHAR(36)  NOT NULL,
+    destination_id VARCHAR(36)  NOT NULL,
+    org_id         VARCHAR(255) NOT NULL,
+    PRIMARY KEY (source_id, destination_id),
+    CONSTRAINT fk_source_destinations_source
+        FOREIGN KEY (source_id) REFERENCES sources (source_id) ON DELETE CASCADE,
+    INDEX idx_source_destinations_org_id (org_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+-- The attribute history of each profile: one row per actual change to an attribute of identity_attributes or
+-- traits, appended and never updated. source_id is NULL for a change made without ?source=, and has no
+-- foreign key, so the history (and the source name it had) outlives a deleted source.
+CREATE TABLE IF NOT EXISTS profile_attribute_sources
+(
+    change_id      VARCHAR(36)  NOT NULL PRIMARY KEY,
+    profile_id     VARCHAR(36)  NOT NULL,
+    attribute_path VARCHAR(255) NOT NULL,
+    action         VARCHAR(10)  NOT NULL,
+    source_id      VARCHAR(36),
+    source_name    VARCHAR(255),
+    org_id         VARCHAR(255) NOT NULL,
+    changed_at     DATETIME(6)  NOT NULL,
+    CONSTRAINT chk_profile_attribute_sources_action CHECK (action IN ('SET', 'REMOVED', 'MERGED')),
+    CONSTRAINT fk_profile_attribute_sources_profile
+        FOREIGN KEY (profile_id) REFERENCES profiles (profile_id) ON DELETE CASCADE,
+    INDEX idx_profile_attribute_sources_attribute (profile_id, attribute_path, changed_at DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE IF NOT EXISTS consent_category_attributes

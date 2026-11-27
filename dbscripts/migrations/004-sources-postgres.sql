@@ -1,7 +1,9 @@
 -- sources: schema delta for an existing CDS database.
 --
--- Adds the sources table of dbscripts/postgres.sql, and nothing else. Purely
--- additive, so it can run against a live database.
+-- Adds the sources, source_destinations and profile_attribute_sources tables of
+-- dbscripts/postgres.sql, and nothing else. Purely additive, so it can run against a
+-- live database. A database that ran an earlier version of this script gets what it
+-- is missing: the transformation_id column and the two newer tables.
 --
 -- Re-runnable. Every statement is guarded, so applying it twice is a no-op.
 
@@ -17,9 +19,43 @@ CREATE TABLE IF NOT EXISTS sources
     name        VARCHAR(255)  NOT NULL,
     description VARCHAR(1024),
     icon_url    VARCHAR(2048) NOT NULL,
+    transformation_id VARCHAR(36),
     created_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
     CONSTRAINT uq_sources_org_id_name UNIQUE (org_id, name)
 );
+
+-- The transformation a source is linked to, NULL when none is.
+ALTER TABLE sources ADD COLUMN IF NOT EXISTS transformation_id VARCHAR(36);
+
+-- The destinations a source sends its profiles to. Removed with the source.
+CREATE TABLE IF NOT EXISTS source_destinations
+(
+    source_id      VARCHAR(36)  NOT NULL REFERENCES sources (source_id) ON DELETE CASCADE,
+    destination_id VARCHAR(36)  NOT NULL,
+    org_id         VARCHAR(255) NOT NULL,
+    PRIMARY KEY (source_id, destination_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_destinations_org_id ON source_destinations (org_id);
+
+-- The attribute history of each profile: one row per actual change to an attribute of identity_attributes or
+-- traits, appended and never updated. source_id is NULL for a change made without ?source=, and has no
+-- foreign key, so the history (and the source name it had) outlives a deleted source.
+CREATE TABLE IF NOT EXISTS profile_attribute_sources
+(
+    change_id      VARCHAR(36)  PRIMARY KEY,
+    profile_id     VARCHAR(36)  NOT NULL REFERENCES profiles (profile_id) ON DELETE CASCADE,
+    attribute_path VARCHAR(255) NOT NULL,
+    action         VARCHAR(10)  NOT NULL CHECK (action IN ('SET', 'REMOVED', 'MERGED')),
+    source_id      VARCHAR(36),
+    source_name    VARCHAR(255),
+    org_id         VARCHAR(255) NOT NULL,
+    changed_at     TIMESTAMPTZ  NOT NULL
+);
+
+-- The index of an earlier version of this script, replaced by the one below.
+DROP INDEX IF EXISTS idx_profile_attribute_sources_profile;
+CREATE INDEX IF NOT EXISTS idx_profile_attribute_sources_attribute ON profile_attribute_sources (profile_id, attribute_path, changed_at DESC);
 
 COMMIT;

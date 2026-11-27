@@ -136,10 +136,38 @@ BEGIN
         name        VARCHAR2(255 CHAR) NOT NULL,
         description VARCHAR2(1024 CHAR),
         icon_url    VARCHAR2(2048 CHAR) NOT NULL,
+        transformation_id VARCHAR2(36 CHAR),
         created_at  TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
         updated_at  TIMESTAMP(6) WITH TIME ZONE DEFAULT FROM_TZ(SYS_EXTRACT_UTC(SYSTIMESTAMP), 'UTC') NOT NULL,
         CONSTRAINT uq_sources_org_id_name UNIQUE (org_id, name)
     )~');
+
+    -- The destinations a source sends its profiles to. Removed with the source.
+    ddl(q'~CREATE TABLE source_destinations
+    (
+        source_id      VARCHAR2(36 CHAR) NOT NULL REFERENCES sources (source_id) ON DELETE CASCADE,
+        destination_id VARCHAR2(36 CHAR) NOT NULL,
+        org_id         VARCHAR2(255 CHAR) NOT NULL,
+        CONSTRAINT pk_source_destinations PRIMARY KEY (source_id, destination_id)
+    )~');
+    ddl('CREATE INDEX idx_source_destinations_org_id ON source_destinations (org_id)');
+
+    -- The attribute history of each profile: one row per actual change to an attribute of identity_attributes or
+    -- traits, appended and never updated. source_id is NULL for a change made without ?source=, and has no
+    -- foreign key, so the history (and the source name it had) outlives a deleted source.
+    ddl(q'~CREATE TABLE profile_attribute_sources
+    (
+        change_id      VARCHAR2(36 CHAR) PRIMARY KEY,
+        profile_id     VARCHAR2(36 CHAR) NOT NULL REFERENCES profiles (profile_id) ON DELETE CASCADE,
+        attribute_path VARCHAR2(255 CHAR) NOT NULL,
+        action         VARCHAR2(10 CHAR) NOT NULL
+            CONSTRAINT chk_profile_attribute_sources_action CHECK (action IN ('SET', 'REMOVED', 'MERGED')),
+        source_id      VARCHAR2(36 CHAR),
+        source_name    VARCHAR2(255 CHAR),
+        org_id         VARCHAR2(255 CHAR) NOT NULL,
+        changed_at     TIMESTAMP(6) WITH TIME ZONE NOT NULL
+    )~');
+    ddl('CREATE INDEX idx_profile_attribute_sources_attribute ON profile_attribute_sources (profile_id, attribute_path, changed_at DESC)');
 
     ddl(q'~CREATE TABLE consent_category_attributes
     (
