@@ -974,7 +974,8 @@ internal_cds_unification_rule_view internal_cds_unification_rule_create internal
 internal_cds_admin_config_view internal_cds_admin_config_update
 internal_cds_organization_view internal_cds_organization_update
 internal_cds_identity_resolution_view internal_cds_identity_resolution_update
-internal_cds_consent_category_view internal_cds_consent_category_create internal_cds_consent_category_update internal_cds_consent_category_delete"
+internal_cds_consent_category_view internal_cds_consent_category_create internal_cds_consent_category_update internal_cds_consent_category_delete
+internal_cds_source_view internal_cds_source_create internal_cds_source_update internal_cds_source_delete"
 
 CDS_API_IDENTIFIERS="/cds/api/v1/profiles
 /cds/api/v1/profile-schema
@@ -982,7 +983,8 @@ CDS_API_IDENTIFIERS="/cds/api/v1/profiles
 /cds/api/v1/config
 /cds/api/v1/organizations
 /cds/api/v1/identity-resolution
-/cds/api/v1/consent-categories"
+/cds/api/v1/consent-categories
+/cds/api/v1/sources"
 
 api_resource_id() {
   isapi "$MGMT_API/api-resources?filter=identifier+eq+$(urlencode "$1")" \
