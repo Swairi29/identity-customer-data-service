@@ -170,14 +170,37 @@ paths:
 
         Fields that are not part of the request schema are rejected with a 400.
 
+        Every attribute the new profile has in `identity_attributes` and `traits` gets a `SET`
+        entry in its history (see `GET /profiles/{profileId}/sources/history`), naming the source of the
+        call, or no source when the call has no `?source=`. The history is written in the same
+        transaction as the profile, so a profile is never stored without it: if the history
+        cannot be written, nothing is stored and the call returns a 500 (CDS-15705).
+
+        With `?source=<sourceId>`, CDS then delivers the profile to the source's destinations. A
+        failed delivery does not undo the stored profile. The body depends on the source:
+        - no transformation linked: the body is in CDS format, as without `?source=`
+        - a transformation linked: the body is in the source's own format and CDS runs it
+          through the transformation before storing it
+
+        The 200 for an existing `cds_profile` cookie writes nothing, so it adds no history.
+
         <br><b>Scope required:</b> `profile:create`
       operationId: createProfile
+      parameters:
+        - $ref: '#/components/parameters/SourceQuery'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProfileRequest'
+              oneOf:
+                - $ref: '#/components/schemas/ProfileRequest'
+                - type: object
+                  description: A payload in the source's own format, sent with `?source=` for a source linked to a transformation.
+                  additionalProperties: true
+                  example:
+                    guest_name: Kasun Perera
+                    mail: kasun@example.com
       responses:
         '200':
           description: A valid `cds_profile` cookie was sent, so the existing profile is returned.
@@ -343,13 +366,22 @@ paths:
             type: array
             items:
               type: string
+        - $ref: '#/components/parameters/SourceQuery'
       responses:
         '200':
-          description: Profile retrieved successfully
+          description: |
+            Profile retrieved successfully. With `?source=` for a source linked to a
+            transformation, the profile is returned in the source's own field names, through the
+            reverse of the transformation. For a source with no transformation it is returned in
+            CDS format.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProfileResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/ProfileResponse'
+                  - type: object
+                    description: The profile in the source's own format, for `?source=` with a transformation.
+                    additionalProperties: true
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -369,14 +401,33 @@ paths:
         into the existing values. If the profile has been merged into another profile, the
         patch is applied to that profile's data.
 
+        With `?source=<sourceId>`, the body goes through the source's transformation when one is
+        linked (otherwise it is in CDS format).
+
+        Each attribute of `identity_attributes` and `traits` whose value the patch actually
+        changes gets an entry in its history (see `GET /profiles/{profileId}/sources/history`): `SET`
+        when it is added or changed, `REMOVED` when it is taken away. Sending a value the
+        attribute already has adds nothing. Values are compared as JSON: `1` and `1.0` are the same
+        value, but an array with the same items in another order is a new value. The history is
+        written in the same transaction as the update; if it cannot be written, the update is not
+        applied and the call returns a 500 (CDS-15705). The entry names the source of the call, or no source
+        without `?source=`. For a profile merged into another, the entries go to the profile
+        whose data changes.
+
         <br><b>Scope required:</b> `profile:update`
       operationId: patchProfile
+      parameters:
+        - $ref: '#/components/parameters/SourceQuery'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProfilePatchRequest'
+              oneOf:
+                - $ref: '#/components/schemas/ProfilePatchRequest'
+                - type: object
+                  description: A payload in the source's own format, sent with `?source=` for a source linked to a transformation.
+                  additionalProperties: true
       responses:
         '200':
           description: Profile updated successfully.
@@ -403,6 +454,97 @@ paths:
       responses:
         '204':
           description: Profile deleted successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProfileNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /profiles/{profileId}/sources:
+    parameters:
+      - $ref: '#/components/parameters/ProfileId'
+    get:
+      tags: [Profile]
+      summary: Get where each attribute of a profile came from
+      description: |
+        The current state of each attribute of `identity_attributes` and `traits` of the profile,
+        worked out from its history (see `GET /profiles/{profileId}/sources/history`), sorted by
+        attribute:
+        - `source_id` and `source_name` come from the attribute's latest change (`null` for a
+          change made without `?source=`)
+        - `created_at` is the attribute's first `SET` (or `MERGED`) since it was last removed, so
+          for an attribute removed and set again it is when it was set again
+        - `updated_at` is the time of its latest change
+        - an attribute whose latest change is `REMOVED` has no value and is left out
+
+        A profile merged into another reads the attributes of the profile that holds the merged
+        data. Attributes the caller cannot read are left out, as in `GET /profiles/{profileId}`.
+
+        <br><b>Scope required:</b> `profile:view`
+      operationId: getProfileSources
+      responses:
+        '200':
+          description: The attributes of the profile, sorted by attribute. Empty when it has none.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AttributeSource'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProfileNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /profiles/{profileId}/sources/history:
+    parameters:
+      - $ref: '#/components/parameters/ProfileId'
+    get:
+      tags: [Profile]
+      summary: Get the attribute history of a profile
+      description: |
+        Every change to an attribute of `identity_attributes` and `traits` of the profile, newest
+        first: which attribute, its `action` (`SET`, `REMOVED` or `MERGED`), when, and which source
+        made the change (`null` for a call without `?source=`). Only actual changes are listed; a
+        call that sends a value the attribute already has adds nothing. Rows are only ever added.
+
+        A deleted source stays in the history under the name it had. A profile merged into another
+        reads the history of the profile that holds the merged data.
+
+        Attributes the caller cannot read are left out, as in `GET /profiles/{profileId}`.
+
+        <br><b>Scope required:</b> `profile:view`
+      operationId: getProfileSourceHistory
+      parameters:
+        - name: attribute
+          in: query
+          required: false
+          description: |
+            Limits the history to one attribute, given as `identity_attributes.<name>` or
+            `traits.<name>` for a top-level attribute. Any other value gives a 400 (CDS-18015).
+          schema:
+            type: string
+          example: traits.email
+      responses:
+        '200':
+          description: The changes, newest first. Empty when the profile has none.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AttributeChange'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1402,6 +1544,8 @@ paths:
         - `name` is missing, empty after trimming, or longer than 255 characters
         - `icon_url` is missing, is not an absolute `https` URL, or is longer than 2048 characters
         - `description` is longer than 1024 characters
+        - `transformation_id` is not a transformation of the organization (CDS-18013)
+        - an entry of `destination_ids` is not a destination of the organization, or is repeated (CDS-18014)
 
         A `name` that another source of the organization already uses gives a 409.
 
@@ -1492,10 +1636,13 @@ paths:
           $ref: '#/components/responses/InternalServerError'
     patch:
       tags: [Sources]
-      summary: Update source description
+      summary: Update a source's description and links
       description: |
-        Only `description` can change. `name`, `icon_url`, `source_id` and any other field are
-        rejected with a 400, as is an empty body. `updated_at` is set to the time of the call.
+        Changes `description`, `transformation_id` and `destination_ids`; only the fields sent
+        change. `transformation_id: null` unlinks the transformation, and `destination_ids`
+        replaces the whole list. `name`, `icon_url`, `source_id` and any other field are
+        rejected with a 400, as is an empty body. The link IDs are checked as on `POST`
+        (CDS-18013, CDS-18014). `updated_at` is set to the time of the call.
 
         <br><b>Scope required:</b> `source:update`
       operationId: patchSource
@@ -1526,6 +1673,9 @@ paths:
       tags: [Sources]
       summary: Delete source
       description: |
+        Deletes the source and its destination links. The profiles it wrote are not changed,
+        and their `GET /profiles/{profileId}/sources/history` keeps the source's name.
+
         The call is idempotent: deleting a source that does not exist also returns a 204. A
         `sourceId` that is not a UUID gives a 400.
 
@@ -2041,6 +2191,21 @@ components:
       in: path
       required: true
       description: The `source_id` CDS generated when the source was added.
+      schema:
+        type: string
+        format: uuid
+      example: 3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90
+    SourceQuery:
+      name: source
+      in: query
+      required: false
+      description: |
+        The `source_id` of the calling app. Omitted, the call works as before, and the attribute
+        history records the changes with no source. Given, the source must be registered in the
+        organization (CDS-18010), and the history names it. A source
+        does not need a transformation: with none linked, the body is in CDS format. With one
+        linked, the body is in the source's format and the transformation must be `ACTIVE`
+        (CDS-18012).
       schema:
         type: string
         format: uuid
@@ -2650,18 +2815,51 @@ components:
           maxLength: 2048
           description: Absolute `https` URL of the icon shown for the source.
           example: https://cdn.example.com/icons/mobile.png
+        transformation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            Transformation that turns this source's payloads into CDS format. Must belong to the
+            organization. Omitted or `null`, the source has no transformation and sends its
+            payloads to the profile API in CDS format.
+          example: 7b1e0c2a-5d4f-4e8b-9a3c-2f6d8e1b4a70
+        destination_ids:
+          type: array
+          uniqueItems: true
+          description: Destinations that receive the profiles this source writes. Each must belong to the organization.
+          items:
+            type: string
+            format: uuid
+          default: []
+          example: [c2d9a4e1-6b3f-4a7e-8d5c-1e9f0b2a3c4d]
 
     SourcePatch:
       type: object
       additionalProperties: false
-      description: The body of `PATCH /sources/{sourceId}`. Only `description` can change.
-      required:
-        - description
+      minProperties: 1
+      description: |
+        The body of `PATCH /sources/{sourceId}`. Only the fields sent change. `name`, `icon_url`
+        and `source_id` cannot change.
       properties:
         description:
           type: string
           maxLength: 1024
           example: Events from the mobile apps and the wearable
+        transformation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The transformation to link. `null` unlinks the current one.
+          example: 7b1e0c2a-5d4f-4e8b-9a3c-2f6d8e1b4a70
+        destination_ids:
+          type: array
+          uniqueItems: true
+          description: Replaces the whole list of linked destinations. `[]` removes them all; `null` is rejected.
+          items:
+            type: string
+            format: uuid
+          example: [c2d9a4e1-6b3f-4a7e-8d5c-1e9f0b2a3c4d]
 
     Source:
       type: object
@@ -2670,6 +2868,8 @@ components:
         - name
         - description
         - icon_url
+        - transformation_id
+        - destination_ids
         - created_at
         - updated_at
       properties:
@@ -2690,6 +2890,19 @@ components:
           type: string
           format: uri
           example: https://cdn.example.com/icons/mobile.png
+        transformation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The linked transformation, `null` when none is linked.
+          example: 7b1e0c2a-5d4f-4e8b-9a3c-2f6d8e1b4a70
+        destination_ids:
+          type: array
+          description: The linked destinations, sorted by ID. Empty when none are linked, never null.
+          items:
+            type: string
+            format: uuid
+          example: [c2d9a4e1-6b3f-4a7e-8d5c-1e9f0b2a3c4d]
         created_at:
           type: string
           format: date-time
@@ -2700,6 +2913,82 @@ components:
           format: date-time
           readOnly: true
           example: '2026-11-25T06:00:00Z'
+
+    AttributeSource:
+      type: object
+      description: Where the current value of one attribute of a profile came from.
+      required:
+        - attribute
+        - source_id
+        - source_name
+        - created_at
+        - updated_at
+      properties:
+        attribute:
+          type: string
+          description: The profile schema attribute, by its CDS name.
+          example: traits.email
+        source_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The source of the attribute's latest change, `null` when that change had none.
+          example: 3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90
+        source_name:
+          type: string
+          nullable: true
+          description: The source's name at the time of that change. Kept after the source is deleted.
+          example: CRM
+        created_at:
+          type: string
+          format: date-time
+          description: The attribute's first `SET` (or `MERGED`) since it was last removed.
+          example: '2026-11-20T10:00:00Z'
+        updated_at:
+          type: string
+          format: date-time
+          description: The time of the attribute's latest change.
+          example: '2026-11-27T09:15:00Z'
+
+    AttributeChange:
+      type: object
+      description: One change to one attribute of a profile.
+      required:
+        - attribute
+        - action
+        - source_id
+        - source_name
+        - changed_at
+      properties:
+        attribute:
+          type: string
+          description: |
+            The profile schema attribute that changed, by its CDS name after any transformation.
+            A complex attribute is one entry; its sub-attributes are not listed apart.
+          example: traits.email
+        action:
+          type: string
+          enum: [SET, REMOVED, MERGED]
+          description: |
+            `SET` when the attribute was added or got a new value, `REMOVED` when it was taken
+            away, `MERGED` when a merge of profiles kept its value (the entry names the source of
+            that value).
+          example: SET
+        source_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: The source that made the change, `null` for a call without `?source=`.
+          example: 3f6c2a1e-8b4d-4c7a-9e2f-1d5b6a7c8e90
+        source_name:
+          type: string
+          nullable: true
+          description: The source's name at the time of the change. Kept after the source is deleted.
+          example: CRM
+        changed_at:
+          type: string
+          format: date-time
+          example: '2026-11-27T09:15:00Z'
 
     ConsentCategoryRequest:
       type: object
