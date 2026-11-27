@@ -29,6 +29,7 @@ var (
 	//   152xx - Unification Rules Management
 	//   153xx - Consent Management
 	//   154xx - Profiles & Cookie Management
+	//   157xx - Sources
 	//   159xx - Other Server Errors
 
 	GetAdminConfig = ErrorMessage{
@@ -190,6 +191,7 @@ var (
 	//   130xx - Profile Schema
 	//   140xx - Consent Management
 	//   160xx - Admin Configurations
+	//   180xx - Sources
 	//   190xx - Other Client Errors
 	BadRequest = ErrorMessage{
 		Code:    errorPrefix + "10001",
@@ -541,5 +543,63 @@ var (
 	InvalidFilterFormat = ErrorMessage{
 		Code:    errorPrefix + "19001",
 		Message: "Invalid filter format.",
+	}
+
+	// Sources.
+	//   157xx - Server errors
+	//   180xx - Client errors
+
+	AddSource = ErrorMessage{
+		Code:    errorPrefix + "15701",
+		Message: "Adding source failed.",
+	}
+	FetchSources = ErrorMessage{
+		Code:    errorPrefix + "15702",
+		Message: "Fetching source(s) failed.",
+	}
+	UpdateSource = ErrorMessage{
+		Code:    errorPrefix + "15703",
+		Message: "Updating source failed.",
+	}
+	DeleteSource = ErrorMessage{
+		Code:    errorPrefix + "15704",
+		Message: "Deleting source failed.",
+	}
+
+	AddSourceBadRequest = ErrorMessage{
+		Code:    errorPrefix + "18001",
+		Message: "Invalid request payload for adding source.",
+	}
+	SourceNameInvalid = ErrorMessage{
+		Code:    errorPrefix + "18002",
+		Message: "Source name is required.",
+	}
+	SourceIconURLInvalid = ErrorMessage{
+		Code:    errorPrefix + "18003",
+		Message: "Invalid source icon URL.",
+	}
+	SourceDescriptionTooLong = ErrorMessage{
+		Code:    errorPrefix + "18004",
+		Message: "Source description is too long.",
+	}
+	SourceIDInvalid = ErrorMessage{
+		Code:    errorPrefix + "18005",
+		Message: "Invalid source ID.",
+	}
+	SourceNotFound = ErrorMessage{
+		Code:    errorPrefix + "18006",
+		Message: "Source not found.",
+	}
+	SourceAlreadyExists = ErrorMessage{
+		Code:    errorPrefix + "18007",
+		Message: "Source already exists.",
+	}
+	UpdateSourceBadRequest = ErrorMessage{
+		Code:    errorPrefix + "18008",
+		Message: "Invalid request payload for updating source.",
+	}
+	SourceEmptyUpdate = ErrorMessage{
+		Code:    errorPrefix + "18009",
+		Message: "Empty update request.",
 	}
 )
