@@ -30,6 +30,7 @@ import (
 	orgService "github.com/wso2/identity-customer-data-service/internal/organization/service"
 	"github.com/wso2/identity-customer-data-service/internal/source/model"
 	"github.com/wso2/identity-customer-data-service/internal/source/provider"
+	"github.com/wso2/identity-customer-data-service/internal/source/service"
 	"github.com/wso2/identity-customer-data-service/internal/system/audit"
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
@@ -122,7 +123,8 @@ func (h *SourceHandler) GetSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, source.ToResponse())
 }
 
-// PatchSource handles PATCH /sources/{sourceId}. Only the description can change.
+// PatchSource handles PATCH /sources/{sourceId}. The description, the transformation and the destinations
+// can change.
 func (h *SourceHandler) PatchSource(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if err := security.AuthnAndAuthz(r, "source:update"); err != nil {
@@ -141,12 +143,13 @@ func (h *SourceHandler) PatchSource(w http.ResponseWriter, r *http.Request) {
 		description := utils.HandleDecodeError(err, "source")
 		if strings.HasPrefix(err.Error(), "json: unknown field ") {
 			field := strings.Trim(strings.TrimPrefix(err.Error(), "json: unknown field "), `"`)
-			description = "Only 'description' can be updated; '" + field + "' is not allowed."
+			description = "Only 'description', 'transformation_id' and 'destination_ids' can be updated; '" +
+				field + "' is not allowed."
 		}
 		utils.HandleError(w, badRequest(errors2.UpdateSourceBadRequest, description))
 		return
 	}
-	if patch.Description == nil {
+	if patch.IsEmpty() {
 		utils.HandleError(w, emptyUpdate())
 		return
 	}
@@ -156,8 +159,8 @@ func (h *SourceHandler) PatchSource(w http.ResponseWriter, r *http.Request) {
 		utils.HandleError(w, err)
 		return
 	}
-	source, err := provider.NewSourceProvider().GetSourceService().UpdateSourceDescription(ctx, org,
-		r.PathValue("sourceId"), *patch.Description)
+	source, err := provider.NewSourceProvider().GetSourceService().UpdateSource(ctx, org,
+		r.PathValue("sourceId"), patch)
 	if err != nil {
 		utils.HandleError(w, err)
 		return
@@ -212,5 +215,5 @@ func badRequest(code errors2.ErrorMessage, description string) error {
 }
 
 func emptyUpdate() error {
-	return badRequest(errors2.SourceEmptyUpdate, "The request body must contain 'description'.")
+	return service.EmptyUpdateError()
 }

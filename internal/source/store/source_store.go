@@ -23,7 +23,7 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
+	"sort"
 
 	"github.com/wso2/identity-customer-data-service/internal/source/model"
 	dbModel "github.com/wso2/identity-customer-data-service/internal/system/database/model"
@@ -34,11 +34,17 @@ import (
 	"github.com/wso2/identity-customer-data-service/internal/system/log"
 )
 
-// AddSource inserts a new source.
+// AddSource inserts a new source and its destination links, in one transaction.
 func AddSource(ctx context.Context, source model.Source) error {
-	_, err := execute(ctx, errors2.AddSource, fmt.Sprintf("inserting source %s", source.SourceID),
-		scripts.InsertSource, source.SourceID, source.OrgID, source.Name, source.Description, source.IconURL,
-		source.CreatedAt, source.UpdatedAt)
+	err := inTx(ctx, errors2.AddSource, fmt.Sprintf("inserting source %s", source.SourceID),
+		func(tx *dbModel.Tx) error {
+			if _, err := tx.ExecContext(ctx, scripts.InsertSource, source.SourceID, source.OrgID, source.Name,
+				source.Description, source.IconURL, source.TransformationID, source.CreatedAt,
+				source.UpdatedAt); err != nil {
+				return err
+			}
+			return insertDestinations(ctx, tx, source)
+		})
 	if err == nil {
 		log.GetLogger().Info("Successfully inserted source: " + source.SourceID)
 	}
@@ -51,9 +57,22 @@ func GetSources(ctx context.Context, orgID string) ([]model.Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	links, err := execute(ctx, errors2.FetchSources, "fetching source destinations",
+		scripts.GetSourceDestinationsByOrg, orgID)
+	if err != nil {
+		return nil, err
+	}
+	destinations := map[string][]string{}
+	for _, row := range links {
+		sourceID := rows.String(row, "source_id")
+		destinations[sourceID] = append(destinations[sourceID], rows.String(row, "destination_id"))
+	}
+
 	sources := make([]model.Source, 0, len(results))
 	for _, row := range results {
-		sources = append(sources, scanSource(row))
+		source := scanSource(row)
+		source.DestinationIDs = sorted(destinations[source.SourceID])
+		sources = append(sources, source)
 	}
 	return sources, nil
 }
@@ -68,14 +87,26 @@ func GetSourceByName(ctx context.Context, name, orgID string) (*model.Source, er
 	return getOne(ctx, "fetching source by name", scripts.GetSourceByName, name, orgID)
 }
 
-// UpdateSourceDescription replaces the description of a source and sets its updated_at.
-func UpdateSourceDescription(ctx context.Context, sourceID, orgID, description string, updatedAt time.Time) error {
-	_, err := execute(ctx, errors2.UpdateSource, fmt.Sprintf("updating source %s", sourceID),
-		scripts.UpdateSourceDescription, description, updatedAt, sourceID, orgID)
-	return err
+// UpdateSource writes the description, transformation and destination links of a source and sets its
+// updated_at, in one transaction. A nil transformation ID stores NULL. The destination links are replaced
+// by source.DestinationIDs.
+func UpdateSource(ctx context.Context, source model.Source) error {
+	return inTx(ctx, errors2.UpdateSource, fmt.Sprintf("updating source %s", source.SourceID),
+		func(tx *dbModel.Tx) error {
+			if _, err := tx.ExecContext(ctx, scripts.UpdateSource, source.Description, source.TransformationID,
+				source.UpdatedAt, source.SourceID, source.OrgID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, scripts.DeleteSourceDestinations, source.SourceID,
+				source.OrgID); err != nil {
+				return err
+			}
+			return insertDestinations(ctx, tx, source)
+		})
 }
 
-// DeleteSource removes the source of the org with the given ID. A missing source is not an error.
+// DeleteSource removes the source of the org with the given ID; ON DELETE CASCADE removes its destination
+// links. A missing source is not an error.
 func DeleteSource(ctx context.Context, sourceID, orgID string) error {
 	_, err := execute(ctx, errors2.DeleteSource, fmt.Sprintf("deleting source %s", sourceID),
 		scripts.DeleteSource, sourceID, orgID)
@@ -94,7 +125,61 @@ func getOne(ctx context.Context, action string, query dbModel.DBQuery, args ...i
 		return nil, nil
 	}
 	source := scanSource(results[0])
+	links, err := execute(ctx, errors2.FetchSources, action+" destinations", scripts.GetSourceDestinations,
+		source.SourceID, source.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(links))
+	for _, row := range links {
+		ids = append(ids, rows.String(row, "destination_id"))
+	}
+	source.DestinationIDs = sorted(ids)
 	return &source, nil
+}
+
+// insertDestinations links the source to each of its destinations.
+func insertDestinations(ctx context.Context, tx *dbModel.Tx, source model.Source) error {
+	for _, destinationID := range source.DestinationIDs {
+		if _, err := tx.ExecContext(ctx, scripts.InsertSourceDestination, source.SourceID, destinationID,
+			source.OrgID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// inTx runs fn in a transaction, and rolls it back and returns a server error with the given code when
+// any step fails.
+func inTx(ctx context.Context, code errors2.ErrorMessage, action string, fn func(tx *dbModel.Tx) error) error {
+	dbClient, err := provider.NewDBProvider().GetDBClient()
+	if err != nil {
+		return serverError(code, "Failed to get db client for "+action, err)
+	}
+	defer func() { _ = dbClient.Close() }()
+
+	tx, err := dbClient.BeginTxContext(ctx)
+	if err != nil {
+		return serverError(code, "Failed to begin transaction for "+action, err)
+	}
+	if err := fn(tx); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			log.GetLogger().Debug("Failed to roll back "+action, log.Error(rollbackErr))
+		}
+		return serverError(code, "Failed to execute query for "+action, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return serverError(code, "Failed to commit "+action, err)
+	}
+	return nil
+}
+
+// sorted returns the IDs in ascending order, never nil. The order is set here rather than by ORDER BY,
+// because each datasource's collation can sort the same IDs differently.
+func sorted(ids []string) []string {
+	out := append([]string{}, ids...)
+	sort.Strings(out)
+	return out
 }
 
 // execute runs one statement and turns a failure into a server error with the given code.
@@ -128,12 +213,22 @@ func serverError(code errors2.ErrorMessage, description string, err error) error
 // and Oracle returns an empty description as NULL.
 func scanSource(row map[string]interface{}) model.Source {
 	return model.Source{
-		SourceID:    rows.String(row, "source_id"),
-		OrgID:       rows.String(row, "org_id"),
-		Name:        rows.String(row, "name"),
-		Description: rows.String(row, "description"),
-		IconURL:     rows.String(row, "icon_url"),
-		CreatedAt:   rows.Time(row, "created_at"),
-		UpdatedAt:   rows.Time(row, "updated_at"),
+		SourceID:         rows.String(row, "source_id"),
+		OrgID:            rows.String(row, "org_id"),
+		Name:             rows.String(row, "name"),
+		Description:      rows.String(row, "description"),
+		IconURL:          rows.String(row, "icon_url"),
+		TransformationID: nullableString(row, "transformation_id"),
+		CreatedAt:        rows.Time(row, "created_at"),
+		UpdatedAt:        rows.Time(row, "updated_at"),
 	}
+}
+
+// nullableString returns the column as a string, or nil when it is NULL or empty.
+func nullableString(row map[string]interface{}, column string) *string {
+	value := rows.String(row, column)
+	if value == "" {
+		return nil
+	}
+	return &value
 }

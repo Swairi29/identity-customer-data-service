@@ -20,6 +20,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	orgModel "github.com/wso2/identity-customer-data-service/internal/organization/model"
 	"github.com/wso2/identity-customer-data-service/internal/source/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
 	"github.com/wso2/identity-customer-data-service/internal/system/database"
@@ -48,6 +50,8 @@ var sourceHandlerOrgCounter atomic.Int64
 
 type sourceHandlerEnv struct {
 	handle string
+	org    orgModel.Ref
+	db     *sql.DB
 	auth   setup.AuthStub
 	h      *SourceHandler
 }
@@ -63,11 +67,12 @@ func newSourceHandlerEnv(t *testing.T) *sourceHandlerEnv {
 		provider.SetTestDB(nil, "")
 		testDB.Terminate()
 	})
-	auth := setup.InstallAuthStub(t, "source:view", "source:create", "source:update", "source:delete")
+	auth := setup.InstallAuthStub(t, "source:view", "source:create", "source:update", "source:delete",
+		"profile:view")
 
 	handle := fmt.Sprintf("acme-%d", sourceHandlerOrgCounter.Add(1))
-	setup.TestOrg(t, handle)
-	return &sourceHandlerEnv{handle: handle, auth: auth, h: NewSourceHandler()}
+	org := setup.TestOrg(t, handle)
+	return &sourceHandlerEnv{handle: handle, org: org, db: testDB.DB, auth: auth, h: NewSourceHandler()}
 }
 
 func (e *sourceHandlerEnv) call(t *testing.T, handler http.HandlerFunc, method, token, body,
@@ -123,8 +128,10 @@ func TestAddSourceReturnsTheCreatedSource(t *testing.T) {
 	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
 	var body map[string]interface{}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
-	assert.ElementsMatch(t, []string{"source_id", "name", "description", "icon_url", "created_at", "updated_at"},
-		keys(body), "the body has the fields of the Source schema, and no org_id")
+	assert.ElementsMatch(t, []string{"source_id", "name", "description", "icon_url", "transformation_id",
+		"destination_ids", "created_at", "updated_at"}, keys(body),
+		"the body has the fields of the Source schema, and no org_id")
+	assert.Equal(t, []interface{}{}, body["destination_ids"], "no destinations is [], not null")
 
 	sourceID := body["source_id"].(string)
 	_, err := uuid.Parse(sourceID)
@@ -222,7 +229,8 @@ func TestPatchSourceErrors(t *testing.T) {
 		body := fmt.Sprintf(`{"description":"x",%q:"y"}`, field)
 		recorder := env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken, body, created.SourceID)
 		description := requireError(t, recorder, http.StatusBadRequest, errors2.UpdateSourceBadRequest)
-		assert.Equal(t, "Only 'description' can be updated; '"+field+"' is not allowed.", description)
+		assert.Equal(t, "Only 'description', 'transformation_id' and 'destination_ids' can be updated; '"+
+			field+"' is not allowed.", description)
 	}
 
 	for _, body := range []string{"", "{}"} {
@@ -290,4 +298,96 @@ func keys(m map[string]interface{}) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestSourceWithoutTransformation(t *testing.T) {
+	env := newSourceHandlerEnv(t)
+
+	// Omitted and null both give a source with no transformation, returned as null.
+	created := env.addMobileApp(t)
+	assert.Nil(t, created.TransformationID)
+	recorder := env.call(t, env.h.GetSource, http.MethodGet, env.auth.ValidToken, "", created.SourceID)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"transformation_id":null`)
+
+	recorder = env.call(t, env.h.AddSource, http.MethodPost, env.auth.ValidToken,
+		`{"name":"Booking App","icon_url":"https://cdn.example.com/b.png","transformation_id":null}`, "")
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"transformation_id":null`)
+
+	// A patch with only transformation_id: null is not empty, and keeps the description.
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"transformation_id":null}`, created.SourceID)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var patched model.SourceResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &patched))
+	assert.Nil(t, patched.TransformationID)
+	assert.Equal(t, created.Description, patched.Description)
+}
+
+func TestTransformationLinksAreRejectedUntilTransformationsExist(t *testing.T) {
+	env := newSourceHandlerEnv(t)
+	created := env.addMobileApp(t)
+	id := uuid.New().String()
+
+	recorder := env.call(t, env.h.AddSource, http.MethodPost, env.auth.ValidToken,
+		`{"name":"Booking App","icon_url":"https://cdn.example.com/b.png","transformation_id":"`+id+`"}`, "")
+	description := requireError(t, recorder, http.StatusBadRequest, errors2.SourceTransformationInvalid)
+	assert.Equal(t, "Transformations are not available yet, so 'transformation_id' must be null or omitted.",
+		description)
+
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"transformation_id":"`+id+`"}`, created.SourceID)
+	requireError(t, recorder, http.StatusBadRequest, errors2.SourceTransformationInvalid)
+
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"transformation_id":"abc123"}`, created.SourceID)
+	description = requireError(t, recorder, http.StatusBadRequest, errors2.SourceTransformationInvalid)
+	assert.Equal(t, "'abc123' is not a valid UUID.", description)
+
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"transformation_id":42}`, created.SourceID)
+	requireError(t, recorder, http.StatusBadRequest, errors2.UpdateSourceBadRequest)
+}
+
+func TestDestinationLinksAreRejectedUntilDestinationsExist(t *testing.T) {
+	env := newSourceHandlerEnv(t)
+	created := env.addMobileApp(t)
+	id := uuid.New().String()
+
+	recorder := env.call(t, env.h.AddSource, http.MethodPost, env.auth.ValidToken,
+		`{"name":"Booking App","icon_url":"https://cdn.example.com/b.png","destination_ids":["`+id+`"]}`, "")
+	description := requireError(t, recorder, http.StatusBadRequest, errors2.SourceDestinationInvalid)
+	assert.Equal(t, "Destinations are not available yet, so 'destination_ids' must be empty or omitted.",
+		description)
+
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"destination_ids":["`+id+`"]}`, created.SourceID)
+	requireError(t, recorder, http.StatusBadRequest, errors2.SourceDestinationInvalid)
+}
+
+func TestDestinationIDsWithoutDestinations(t *testing.T) {
+	env := newSourceHandlerEnv(t)
+
+	recorder := env.call(t, env.h.AddSource, http.MethodPost, env.auth.ValidToken,
+		`{"name":"Booking App","icon_url":"https://cdn.example.com/b.png","destination_ids":[]}`, "")
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	var created model.SourceResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &created))
+	assert.Equal(t, []string{}, created.DestinationIDs)
+
+	// [] is a valid patch on its own, and GET returns [].
+	recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken,
+		`{"destination_ids":[]}`, created.SourceID)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	recorder = env.call(t, env.h.GetAllSources, http.MethodGet, env.auth.ValidToken, "", "")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"destination_ids":[]`)
+
+	// null is not a list, and a wrong type names the field.
+	for _, body := range []string{`{"destination_ids":null}`, `{"destination_ids":"x"}`, `{"destination_ids":[1]}`} {
+		recorder = env.call(t, env.h.PatchSource, http.MethodPatch, env.auth.ValidToken, body, created.SourceID)
+		description := requireError(t, recorder, http.StatusBadRequest, errors2.UpdateSourceBadRequest)
+		assert.Contains(t, description, "destination_ids", body)
+	}
 }

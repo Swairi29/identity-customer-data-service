@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,16 +43,30 @@ type SourceServiceInterface interface {
 	AddSource(ctx context.Context, org orgModel.Ref, source model.Source) (*model.Source, error)
 	GetSources(ctx context.Context, org orgModel.Ref) ([]model.Source, error)
 	GetSource(ctx context.Context, org orgModel.Ref, sourceID string) (*model.Source, error)
-	UpdateSourceDescription(ctx context.Context, org orgModel.Ref, sourceID, description string) (*model.Source, error)
+	UpdateSource(ctx context.Context, org orgModel.Ref, sourceID string, patch model.SourcePatch) (*model.Source, error)
 	DeleteSource(ctx context.Context, org orgModel.Ref, sourceID string) error
+	ResolveRequestSource(ctx context.Context, org orgModel.Ref, sourceID string) (*model.Source, error)
+	ToCDSFormat(ctx context.Context, org orgModel.Ref, source model.Source, payload map[string]any) (
+		map[string]any, error)
+	ToSourceFormat(ctx context.Context, org orgModel.Ref, source model.Source, profile map[string]any) (
+		map[string]any, error)
 }
 
 // SourceService is the default implementation.
-type SourceService struct{}
+type SourceService struct {
+	transformations TransformationLookup
+	destinations    DestinationLookup
+}
 
-// GetSourceService returns a new instance.
+// GetSourceService returns a new instance. Transformations and destinations are not available yet, so
+// sources cannot link to them.
 func GetSourceService() SourceServiceInterface {
-	return &SourceService{}
+	return NewSourceService(notConfiguredTransformations{}, notConfiguredDestinations{})
+}
+
+// NewSourceService returns a service that checks source links against the given modules.
+func NewSourceService(transformations TransformationLookup, destinations DestinationLookup) *SourceService {
+	return &SourceService{transformations: transformations, destinations: destinations}
 }
 
 // now is the clock of the service. The timestamps are truncated to microseconds, the precision every
@@ -68,6 +83,16 @@ func (s *SourceService) AddSource(ctx context.Context, org orgModel.Ref, source 
 	if err := validateSource(source); err != nil {
 		return nil, err
 	}
+	transformationID, err := validateTransformationLink(ctx, s.transformations, org.ID, source.TransformationID)
+	if err != nil {
+		return nil, err
+	}
+	source.TransformationID = transformationID
+	destinationIDs, err := validateDestinationLinks(ctx, s.destinations, org.ID, source.DestinationIDs)
+	if err != nil {
+		return nil, err
+	}
+	source.DestinationIDs = sortedIDs(destinationIDs)
 
 	existing, err := store.GetSourceByName(ctx, source.Name, org.ID)
 	if err != nil {
@@ -111,26 +136,56 @@ func (s *SourceService) GetSource(ctx context.Context, org orgModel.Ref, sourceI
 	return source, nil
 }
 
-// UpdateSourceDescription replaces the description of a source and returns the updated source.
-func (s *SourceService) UpdateSourceDescription(ctx context.Context, org orgModel.Ref, sourceID,
-	description string) (*model.Source, error) {
+// UpdateSource changes the fields the patch sends and returns the updated source. A transformation_id of
+// null unlinks the transformation, and destination_ids replaces the whole list. An empty patch gives a 400.
+// A patch with a bad link changes nothing.
+func (s *SourceService) UpdateSource(ctx context.Context, org orgModel.Ref, sourceID string,
+	patch model.SourcePatch) (*model.Source, error) {
 	if err := suborg.RejectWrite(ctx, org.ID); err != nil {
 		return nil, err
 	}
-	if err := validateDescription(description); err != nil {
-		return nil, err
+	if patch.IsEmpty() {
+		return nil, EmptyUpdateError()
+	}
+	if patch.Description != nil {
+		if err := validateDescription(*patch.Description); err != nil {
+			return nil, err
+		}
 	}
 	source, err := s.GetSource(ctx, org, sourceID)
 	if err != nil {
 		return nil, err
 	}
 
-	source.Description = description
+	if patch.Description != nil {
+		source.Description = *patch.Description
+	}
+	if patch.TransformationID.Set {
+		transformationID, err := validateTransformationLink(ctx, s.transformations, org.ID,
+			patch.TransformationID.Value)
+		if err != nil {
+			return nil, err
+		}
+		source.TransformationID = transformationID
+	}
+	if patch.DestinationIDs.Set {
+		destinationIDs, err := validateDestinationLinks(ctx, s.destinations, org.ID, patch.DestinationIDs.Values)
+		if err != nil {
+			return nil, err
+		}
+		source.DestinationIDs = sortedIDs(destinationIDs)
+	}
 	source.UpdatedAt = now()
-	if err := store.UpdateSourceDescription(ctx, source.SourceID, org.ID, description, source.UpdatedAt); err != nil {
+	if err := store.UpdateSource(ctx, *source); err != nil {
 		return nil, err
 	}
 	return source, nil
+}
+
+// EmptyUpdateError is the 400 for a patch that changes nothing.
+func EmptyUpdateError() error {
+	return clientError(errors2.SourceEmptyUpdate, http.StatusBadRequest,
+		"The request body must contain 'description', 'transformation_id' or 'destination_ids'.")
 }
 
 // DeleteSource removes a source of the org. Deleting a source that does not exist succeeds, so the call is
@@ -144,6 +199,14 @@ func (s *SourceService) DeleteSource(ctx context.Context, org orgModel.Ref, sour
 		return err
 	}
 	return store.DeleteSource(ctx, id, org.ID)
+}
+
+// sortedIDs returns the IDs in ascending order, the order the store reads them back in, so the response of
+// a write matches what a later read returns.
+func sortedIDs(ids []string) []string {
+	out := append([]string{}, ids...)
+	sort.Strings(out)
+	return out
 }
 
 func validateSource(source model.Source) error {

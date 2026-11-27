@@ -63,7 +63,7 @@ func newSourceEnv(t *testing.T) *sourceEnv {
 		testDB.Terminate()
 	})
 
-	env := &sourceEnv{ctx: context.Background(), db: testDB.DB, svc: &SourceService{}}
+	env := &sourceEnv{ctx: context.Background(), db: testDB.DB, svc: GetSourceService().(*SourceService)}
 	env.org = env.newOrg(t)
 	return env
 }
@@ -82,6 +82,11 @@ func setClock(t *testing.T, at time.Time) {
 	previous := now
 	now = func() time.Time { return at }
 	t.Cleanup(func() { now = previous })
+}
+
+// describe is a patch that changes only the description.
+func describe(description string) model.SourcePatch {
+	return model.SourcePatch{Description: &description}
 }
 
 func source(name string) model.Source {
@@ -261,7 +266,7 @@ func TestUpdateSourceDescription(t *testing.T) {
 
 	updatedAt := created.Add(time.Hour)
 	setClock(t, updatedAt)
-	updated, err := env.svc.UpdateSourceDescription(env.ctx, env.org, added.SourceID, "Mobile apps and the wearable")
+	updated, err := env.svc.UpdateSource(env.ctx, env.org, added.SourceID, describe("Mobile apps and the wearable"))
 	require.NoError(t, err)
 	assert.Equal(t, "Mobile apps and the wearable", updated.Description)
 	assert.Equal(t, created, updated.CreatedAt)
@@ -274,7 +279,7 @@ func TestUpdateSourceDescription(t *testing.T) {
 	assert.Equal(t, added.IconURL, stored.IconURL, "only the description changes")
 
 	// The description can be cleared.
-	cleared, err := env.svc.UpdateSourceDescription(env.ctx, env.org, added.SourceID, "")
+	cleared, err := env.svc.UpdateSource(env.ctx, env.org, added.SourceID, describe(""))
 	require.NoError(t, err)
 	assert.Equal(t, "", cleared.Description)
 }
@@ -283,14 +288,13 @@ func TestUpdateSourceDescriptionErrors(t *testing.T) {
 	env := newSourceEnv(t)
 	added := env.add(t, env.org, "Mobile App")
 
-	_, err := env.svc.UpdateSourceDescription(env.ctx, env.org, added.SourceID,
-		strings.Repeat("d", model.MaxDescriptionLength+1))
+	_, err := env.svc.UpdateSource(env.ctx, env.org, added.SourceID, describe(strings.Repeat("d", model.MaxDescriptionLength+1)))
 	requireClientError(t, err, http.StatusBadRequest, errors2.SourceDescriptionTooLong)
 
-	_, err = env.svc.UpdateSourceDescription(env.ctx, env.org, "not-a-uuid", "x")
+	_, err = env.svc.UpdateSource(env.ctx, env.org, "not-a-uuid", describe("x"))
 	requireClientError(t, err, http.StatusBadRequest, errors2.SourceIDInvalid)
 
-	_, err = env.svc.UpdateSourceDescription(env.ctx, env.org, uuid.New().String(), "x")
+	_, err = env.svc.UpdateSource(env.ctx, env.org, uuid.New().String(), describe("x"))
 	requireClientError(t, err, http.StatusNotFound, errors2.SourceNotFound)
 }
 
@@ -316,7 +320,7 @@ func TestAnOrgCannotReachTheSourcesOfAnother(t *testing.T) {
 	_, err := env.svc.GetSource(env.ctx, other, added.SourceID)
 	requireClientError(t, err, http.StatusNotFound, errors2.SourceNotFound)
 
-	_, err = env.svc.UpdateSourceDescription(env.ctx, other, added.SourceID, "changed")
+	_, err = env.svc.UpdateSource(env.ctx, other, added.SourceID, describe("changed"))
 	requireClientError(t, err, http.StatusNotFound, errors2.SourceNotFound)
 
 	require.NoError(t, env.svc.DeleteSource(env.ctx, other, added.SourceID))
@@ -336,7 +340,7 @@ func TestAChildOrganizationCanOnlyReadSources(t *testing.T) {
 	_, err = env.svc.AddSource(env.ctx, child, source("Mobile App"))
 	requireClientError(t, err, http.StatusForbidden, errors2.SubOrgWriteNotAllowed)
 
-	_, err = env.svc.UpdateSourceDescription(env.ctx, child, uuid.New().String(), "x")
+	_, err = env.svc.UpdateSource(env.ctx, child, uuid.New().String(), describe("x"))
 	requireClientError(t, err, http.StatusForbidden, errors2.SubOrgWriteNotAllowed)
 
 	err = env.svc.DeleteSource(env.ctx, child, uuid.New().String())

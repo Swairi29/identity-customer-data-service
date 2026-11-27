@@ -19,7 +19,13 @@
 // Package model defines the data sources of an organization and their API requests and responses.
 package model
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"time"
+)
 
 // Field limits of a source.
 const (
@@ -36,8 +42,12 @@ type Source struct {
 	Name        string
 	Description string
 	IconURL     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// TransformationID is the linked transformation, nil when none is linked.
+	TransformationID *string
+	// DestinationIDs are the linked destinations, sorted by ID. Empty when none are linked.
+	DestinationIDs []string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // SourceRequest is the body of POST /sources.
@@ -45,22 +55,86 @@ type SourceRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	IconURL     string `json:"icon_url"`
+	// TransformationID is optional; omitted or null, no transformation is linked.
+	TransformationID *string `json:"transformation_id"`
+	// DestinationIDs is optional; omitted, null or empty, no destinations are linked.
+	DestinationIDs []string `json:"destination_ids"`
 }
 
-// SourcePatch is the body of PATCH /sources/{sourceId}. Only the description can change.
+// SourcePatch is the body of PATCH /sources/{sourceId}. Only the fields sent change.
 // Description is a pointer so that a body without it can be told apart from an empty description.
+// TransformationID tells a body without it apart from one with null, which unlinks the transformation.
+// DestinationIDs, when sent, replaces the whole list; [] removes every link.
 type SourcePatch struct {
-	Description *string `json:"description"`
+	Description      *string        `json:"description"`
+	TransformationID OptionalID     `json:"transformation_id"`
+	DestinationIDs   OptionalIDList `json:"destination_ids"`
+}
+
+// IsEmpty reports whether the patch changes nothing.
+func (p SourcePatch) IsEmpty() bool {
+	return p.Description == nil && !p.TransformationID.Set && !p.DestinationIDs.Set
+}
+
+// OptionalID is a nullable ID field of a patch. Set is false when the field was not sent; when it was,
+// Value is the ID, or nil for null.
+type OptionalID struct {
+	Set   bool
+	Value *string
+}
+
+// UnmarshalJSON is only called when the field is in the body, so it marks the field as set.
+func (o *OptionalID) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		o.Value = nil
+		return nil
+	}
+	var id string
+	if err := json.Unmarshal(data, &id); err != nil {
+		return err
+	}
+	o.Value = &id
+	return nil
+}
+
+// OptionalIDList is a list field of a patch. Set is false when the field was not sent; when it was, Values
+// is the list, never nil. null is not a list and is rejected, so it cannot be mistaken for [].
+type OptionalIDList struct {
+	Set    bool
+	Values []string
+}
+
+// UnmarshalJSON is only called when the field is in the body, so it marks the field as set.
+func (o *OptionalIDList) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return &json.UnmarshalTypeError{Value: "null", Type: reflect.TypeOf([]string{}), Field: "destination_ids"}
+	}
+	var ids []string
+	if err := json.Unmarshal(data, &ids); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			typeErr.Field = "destination_ids"
+		}
+		return err
+	}
+	o.Set = true
+	o.Values = append([]string{}, ids...)
+	return nil
 }
 
 // SourceResponse is the API representation of a source. org_id is internal and never returned.
 type SourceResponse struct {
-	SourceID    string    `json:"source_id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	IconURL     string    `json:"icon_url"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	SourceID    string `json:"source_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	IconURL     string `json:"icon_url"`
+	// TransformationID is null when no transformation is linked.
+	TransformationID *string `json:"transformation_id"`
+	// DestinationIDs is [] when no destinations are linked, never null.
+	DestinationIDs []string  `json:"destination_ids"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ToSource converts a request into a source of the given org. The server-set fields are left empty.
@@ -70,17 +144,30 @@ func (r SourceRequest) ToSource(orgID string) Source {
 		Name:        r.Name,
 		Description: r.Description,
 		IconURL:     r.IconURL,
+		// The service checks the transformation and stores it in canonical form.
+		TransformationID: r.TransformationID,
+		DestinationIDs:   r.DestinationIDs,
 	}
 }
 
 // ToResponse converts a source to its API representation, with the timestamps in UTC.
 func (s Source) ToResponse() SourceResponse {
 	return SourceResponse{
-		SourceID:    s.SourceID,
-		Name:        s.Name,
-		Description: s.Description,
-		IconURL:     s.IconURL,
-		CreatedAt:   s.CreatedAt.UTC(),
-		UpdatedAt:   s.UpdatedAt.UTC(),
+		SourceID:         s.SourceID,
+		Name:             s.Name,
+		Description:      s.Description,
+		IconURL:          s.IconURL,
+		TransformationID: s.TransformationID,
+		DestinationIDs:   nonNil(s.DestinationIDs),
+		CreatedAt:        s.CreatedAt.UTC(),
+		UpdatedAt:        s.UpdatedAt.UTC(),
 	}
+}
+
+// nonNil returns ids, or an empty list when it is nil, so the response has [] rather than null.
+func nonNil(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
 }
