@@ -49,6 +49,8 @@ import (
 	profileStore "github.com/wso2/identity-customer-data-service/internal/profile/store"
 	"github.com/wso2/identity-customer-data-service/internal/profile_schema/identitysource"
 	schemaService "github.com/wso2/identity-customer-data-service/internal/profile_schema/service"
+	"github.com/wso2/identity-customer-data-service/internal/source/lineage"
+	sourceModel "github.com/wso2/identity-customer-data-service/internal/source/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/config"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
 	errors2 "github.com/wso2/identity-customer-data-service/internal/system/errors"
@@ -58,6 +60,9 @@ import (
 // ProfilesServiceInterface defines the operations on customer profiles, their consents and cookies.
 type ProfilesServiceInterface interface {
 	DeleteProfile(ctx context.Context, profileID string, orgID string) error
+	GetAttributeHistory(ctx context.Context, profileID, orgID, attribute string) ([]sourceModel.AttributeChange,
+		error)
+	GetAttributeSources(ctx context.Context, profileID, orgID string) ([]sourceModel.AttributeSource, error)
 	GetAllProfilesCursor(ctx context.Context,
 		orgID string, limit int, cursor *profileModel.ProfileCursor) ([]profileModel.ProfileResponse, bool, error)
 	CreateProfile(ctx context.Context,
@@ -201,7 +206,9 @@ func (ps *ProfilesService) CreateProfile(ctx context.Context,
 		UpdatedAt: createdTime,
 	}
 
-	if err := profileStore.InsertProfile(ctx, orgID, profile); err != nil {
+	// Every attribute of the new profile is a change, made by the source of the request (or none).
+	history := lineage.Changes(ctx, profileID, lineage.Attributes{}, attributesOf(profile), createdTime)
+	if err := profileStore.InsertProfileWithHistory(ctx, orgID, profile, history); err != nil {
 		logger.Debug(fmt.Sprintf("Error inserting profile: %s", profile.ProfileID), log.Error(err))
 		return nil, err
 	}
@@ -873,6 +880,9 @@ func (ps *ProfilesService) updateProfile(ctx context.Context, profileID string, 
 	}
 
 	var profileToUpDate profileModel.Profile
+	// stored is the profile whose data the update replaces: the profile itself, or its master for a profile
+	// merged into another. The attribute history is of that profile.
+	stored := *profile
 	updatedTime := time.Now().UTC()
 	appData, err := ConvertAppData(updatedProfile.ApplicationData)
 	if err != nil {
@@ -905,6 +915,16 @@ func (ps *ProfilesService) updateProfile(ctx context.Context, profileID string, 
 			return nil, serverError
 		}
 
+		if masterProfile == nil {
+			return nil, errors2.NewServerError(errors2.ErrorMessage{
+				Code:    errors2.UpdateProfile.Code,
+				Message: errors2.UpdateProfile.Message,
+				Description: fmt.Sprintf("Master profile %s of profile %s not found",
+					profile.ProfileStatus.ReferenceProfileID, profile.ProfileID),
+			}, fmt.Errorf("master profile %s not found", profile.ProfileStatus.ReferenceProfileID))
+		}
+		stored = *masterProfile
+
 		profileToUpDate = profileModel.Profile{
 			ProfileID:          masterProfile.ProfileID,
 			OrgID:              masterProfile.OrgID,
@@ -918,7 +938,10 @@ func (ps *ProfilesService) updateProfile(ctx context.Context, profileID string, 
 		}
 	}
 
-	if err := profileStore.UpdateProfile(ctx, orgID, profileToUpDate); err != nil {
+	// Only the attributes whose value the update changes enter the history.
+	history := lineage.Changes(ctx, profileToUpDate.ProfileID, attributesOf(stored), attributesOf(profileToUpDate),
+		updatedTime)
+	if err := profileStore.UpdateProfileWithHistory(ctx, orgID, profileToUpDate, history); err != nil {
 		logger.Error(fmt.Sprintf("Error updating profile: %s", profileToUpDate.ProfileID), log.Error(err))
 		return nil, err
 	}
@@ -957,6 +980,11 @@ func (ps *ProfilesService) updateProfile(ctx context.Context, profileID string, 
 	}
 	logger.Info("Successfully updated profile: " + profileFetched.ProfileID)
 	return profileFetched, nil
+}
+
+// attributesOf returns the attribute groups of a profile that its attribute history covers.
+func attributesOf(profile profileModel.Profile) lineage.Attributes {
+	return lineage.Attributes{IdentityAttributes: profile.IdentityAttributes, Traits: profile.Traits}
 }
 
 // ProfileUnificationQueue is an interface for the profile unification queue.

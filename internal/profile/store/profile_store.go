@@ -14,7 +14,10 @@ import (
 	"time"
 
 	"github.com/wso2/identity-customer-data-service/internal/profile/model"
+	sourceModel "github.com/wso2/identity-customer-data-service/internal/source/model"
+	sourceStore "github.com/wso2/identity-customer-data-service/internal/source/store"
 	"github.com/wso2/identity-customer-data-service/internal/system/constants"
+	dbModel "github.com/wso2/identity-customer-data-service/internal/system/database/model"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/provider"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/rows"
 	"github.com/wso2/identity-customer-data-service/internal/system/database/scripts"
@@ -99,6 +102,14 @@ func scanProfileConsentRow(row map[string]interface{}) model.ConsentRecord {
 
 // InsertProfile inserts a new profile into the database
 func InsertProfile(ctx context.Context, orgID string, profile model.Profile) error {
+	return InsertProfileWithHistory(ctx, orgID, profile, nil)
+}
+
+// InsertProfileWithHistory stores a new profile and the attribute history of its creation. The profile row,
+// its reference row and the history are written in one transaction, so a profile is never stored without
+// its history. Application data, which the history does not cover, is written after it.
+func InsertProfileWithHistory(ctx context.Context, orgID string, profile model.Profile,
+	history []sourceModel.AttributeChange) error {
 	dbClient, err := provider.NewDBProvider().GetDBClient()
 	logger := log.GetLogger()
 	if err != nil {
@@ -126,9 +137,20 @@ func InsertProfile(ctx context.Context, orgID string, profile model.Profile) err
 		profileStatus = constants.MergedTo
 	}
 
+	tx, err := dbClient.BeginTxContext(ctx)
+	if err != nil {
+		errorMsg := fmt.Sprintf("Failed to begin the transaction for inserting profile: %s", profile.ProfileID)
+		logger.Debug(errorMsg, log.Error(err))
+		return errors2.NewServerError(errors2.ErrorMessage{
+			Code:        errors2.AddProfile.Code,
+			Message:     errors2.AddProfile.Message,
+			Description: errorMsg,
+		}, err)
+	}
+
 	query := scripts.InsertProfile
 
-	_, err = dbClient.ExecuteQueryContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		profile.ProfileID,
 		profile.UserID,
 		orgID,
@@ -141,6 +163,7 @@ func InsertProfile(ctx context.Context, orgID string, profile model.Profile) err
 	)
 
 	if err != nil {
+		rollback(tx, profile.ProfileID)
 		errorMsg := fmt.Sprintf("Failed to insert profile with Id: %s", profile.ProfileID)
 		logger.Debug(errorMsg, log.Error(err))
 		serverError := errors2.NewServerError(errors2.ErrorMessage{
@@ -153,7 +176,7 @@ func InsertProfile(ctx context.Context, orgID string, profile model.Profile) err
 
 	referenceQuery := scripts.InsertProfileReference
 
-	_, err = dbClient.ExecuteQueryContext(ctx, referenceQuery,
+	_, err = tx.ExecContext(ctx, referenceQuery,
 		profile.ProfileID,
 		profileStatus,
 		profile.ProfileStatus.ReferenceProfileID,
@@ -163,6 +186,7 @@ func InsertProfile(ctx context.Context, orgID string, profile model.Profile) err
 	)
 
 	if err != nil {
+		rollback(tx, profile.ProfileID)
 		errorMsg := fmt.Sprintf("Failed to insert profile referencea with Id: %s", profile.ProfileID)
 		logger.Debug(errorMsg, log.Error(err))
 		serverError := errors2.NewServerError(errors2.ErrorMessage{
@@ -171,6 +195,10 @@ func InsertProfile(ctx context.Context, orgID string, profile model.Profile) err
 			Description: errorMsg,
 		}, err)
 		return serverError
+	}
+
+	if err := commitWithHistory(ctx, tx, orgID, profile.ProfileID, history, errors2.AddProfile); err != nil {
+		return err
 	}
 
 	err = InsertApplicationData(ctx, profile.ProfileID, profile.ApplicationData)
@@ -459,6 +487,14 @@ func FetchApplicationDataWithAppID(ctx context.Context, profileID string, appID 
 
 // UpdateProfile updates the profile
 func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) error {
+	return UpdateProfileWithHistory(ctx, orgID, profile, nil)
+}
+
+// UpdateProfileWithHistory updates a profile and appends the attribute history of the update. The profile
+// row, its reference row and the history are written in one transaction, so the profile never changes
+// without its history. Application data, which the history does not cover, is written after it.
+func UpdateProfileWithHistory(ctx context.Context, orgID string, profile model.Profile,
+	history []sourceModel.AttributeChange) error {
 	// An organization that CDS does not know gets an empty key, which matches no row.
 
 	dbClient, err := provider.NewDBProvider().GetDBClient()
@@ -489,9 +525,20 @@ func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) err
 		profileStatus = constants.MergedTo
 	}
 
+	tx, err := dbClient.BeginTxContext(ctx)
+	if err != nil {
+		errorMsg := fmt.Sprintf("Failed to begin the transaction for updating profile: %s", profile.ProfileID)
+		logger.Debug(errorMsg, log.Error(err))
+		return errors2.NewServerError(errors2.ErrorMessage{
+			Code:        errors2.UpdateProfile.Code,
+			Message:     errors2.UpdateProfile.Message,
+			Description: errorMsg,
+		}, err)
+	}
+
 	query := scripts.UpdateProfile
 
-	_, err = dbClient.ExecuteQueryContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		profile.UserID,
 		profile.ProfileStatus.ListProfile,
 		profile.ProfileStatus.DeleteProfile,
@@ -502,6 +549,7 @@ func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) err
 		orgID,
 	)
 	if err != nil {
+		rollback(tx, profile.ProfileID)
 		errorMsg := fmt.Sprintf("Failed updating the profile: %s", profile.ProfileID)
 		logger.Debug(errorMsg, log.Error(err))
 		serverError := errors2.NewServerError(errors2.ErrorMessage{
@@ -514,7 +562,7 @@ func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) err
 
 	query = scripts.UpsertProfileReference
 
-	_, err = dbClient.ExecuteQueryContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		profile.ProfileID,
 		profileStatus,
 		profile.ProfileStatus.ReferenceProfileID,
@@ -522,6 +570,7 @@ func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) err
 		profile.ProfileID,
 	)
 	if err != nil {
+		rollback(tx, profile.ProfileID)
 		errorMsg := fmt.Sprintf("Failed updating the profile: %s", profile.ProfileID)
 		logger.Debug(errorMsg, log.Error(err))
 		serverError := errors2.NewServerError(errors2.ErrorMessage{
@@ -530,6 +579,9 @@ func UpdateProfile(ctx context.Context, orgID string, profile model.Profile) err
 			Description: errorMsg,
 		}, err)
 		return serverError
+	}
+	if err := commitWithHistory(ctx, tx, orgID, profile.ProfileID, history, errors2.UpdateProfile); err != nil {
+		return err
 	}
 	// Update application data
 	err = InsertApplicationData(ctx, profile.ProfileID, profile.ApplicationData)
@@ -2342,4 +2394,39 @@ func FindOldestReferenceProfileIDByAttributeValues(ctx context.Context, orgID, p
 		return "", nil
 	}
 	return rows[0][fieldProfileID].(string), nil
+}
+
+// commitWithHistory appends the attribute history of a profile write to its transaction and commits it. A
+// failure rolls the whole write back: a history failure gives CDS-15705, a commit failure the write's code.
+func commitWithHistory(ctx context.Context, tx *dbModel.Tx, orgID, profileID string,
+	history []sourceModel.AttributeChange, code errors2.ErrorMessage) error {
+	logger := log.GetLogger()
+	if err := sourceStore.InsertAttributeChangesTx(ctx, tx, orgID, history); err != nil {
+		rollback(tx, profileID)
+		errorMsg := fmt.Sprintf("Failed to record the attribute history of profile: %s", profileID)
+		logger.Debug(errorMsg, log.Error(err))
+		return errors2.NewServerError(errors2.ErrorMessage{
+			Code:        errors2.RecordAttributeHistory.Code,
+			Message:     errors2.RecordAttributeHistory.Message,
+			Description: errorMsg,
+		}, err)
+	}
+	if err := tx.Commit(); err != nil {
+		errorMsg := fmt.Sprintf("Failed to commit the write of profile: %s", profileID)
+		logger.Debug(errorMsg, log.Error(err))
+		return errors2.NewServerError(errors2.ErrorMessage{
+			Code:        code.Code,
+			Message:     code.Message,
+			Description: errorMsg,
+		}, err)
+	}
+	return nil
+}
+
+// rollback rolls a failed profile write back, logging a failure to do so.
+func rollback(tx *dbModel.Tx, profileID string) {
+	if err := tx.Rollback(); err != nil {
+		log.GetLogger().Debug(fmt.Sprintf("Failed to roll back the write of profile: %s", profileID),
+			log.Error(err))
+	}
 }

@@ -20,9 +20,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -96,6 +98,11 @@ func (ph *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 		utils.HandleError(w, clientError)
 		return
 	}
+	source, err := requestSource(ctx, r, org)
+	if err != nil {
+		utils.HandleError(w, err)
+		return
+	}
 	profilesProvider := provider.NewProfilesProvider()
 	profilesService := profilesProvider.GetProfilesService()
 	profile, err := profilesService.GetProfile(ctx, profileID, org.ID)
@@ -128,9 +135,14 @@ func (ph *ProfileHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 		profile = &filtered
 	}
 
+	response, err := responseInSourceFormat(ctx, org, source, profile)
+	if err != nil {
+		utils.HandleError(w, err)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(profile)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // DeleteProfile handles profile deletion
@@ -550,11 +562,32 @@ func (ph *ProfileHandler) InitProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	source, err := requestSource(ctx, r, org)
+	if err != nil {
+		utils.HandleError(w, err)
+		return
+	}
+	ctx = writeContext(ctx, source)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		utils.HandleError(w, errors2.NewClientError(errors2.ErrorMessage{
+			Code:        errors2.AddProfile.Code,
+			Message:     errors2.AddProfile.Message,
+			Description: "Failed to read the request body.",
+		}, http.StatusBadRequest))
+		return
+	}
+	body, err = bodyToCDS(ctx, org, source, body, errors2.AddProfile)
+	if err != nil {
+		utils.HandleError(w, err)
+		return
+	}
+
 	profilesProvider := provider.NewProfilesProvider()
 	profilesService := profilesProvider.GetProfilesService()
 
 	var profile model.ProfileCreateRequest
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	err = decoder.Decode(&profile)
 
@@ -743,6 +776,12 @@ func (ph *ProfileHandler) PatchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	source, err := requestSource(ctx, r, org)
+	if err != nil {
+		utils.HandleError(w, err)
+		return
+	}
+
 	var patchData map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&patchData); err != nil {
 		clientError := errors2.NewClientError(errors2.ErrorMessage{
@@ -753,6 +792,11 @@ func (ph *ProfileHandler) PatchProfile(w http.ResponseWriter, r *http.Request) {
 		utils.HandleError(w, clientError)
 		return
 	}
+	if patchData, err = patchToCDS(ctx, org, source, patchData); err != nil {
+		utils.HandleError(w, err)
+		return
+	}
+	ctx = writeContext(ctx, source)
 	if _, ok := patchData["user_id"]; ok {
 		clientError := errors2.NewClientError(errors2.ErrorMessage{
 			Code:        errors2.UpdateProfile.Code,
