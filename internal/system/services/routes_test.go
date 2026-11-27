@@ -82,6 +82,8 @@ func TestProfileRoutes(t *testing.T) {
 		{http.MethodDelete, "/profiles/p-1"},
 		{http.MethodGet, "/profiles/p-1/consents"},
 		{http.MethodPut, "/profiles/p-1/consents"},
+		{http.MethodGet, "/profiles/p-1/sources"},
+		{http.MethodGet, "/profiles/p-1/sources/history"},
 	})
 }
 

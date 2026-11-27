@@ -457,6 +457,8 @@ func TestProfileHandlersRequireAuthentication(t *testing.T) {
 		{"link", env.h.LinkProfile, http.MethodPost, `{}`},
 		{"get consents", env.h.GetProfileConsents, http.MethodGet, ""},
 		{"update consents", env.h.UpdateProfileConsents, http.MethodPut, `[]`},
+		{"get attribute sources", env.h.GetProfileSources, http.MethodGet, ""},
+		{"get attribute history", env.h.GetProfileSourceHistory, http.MethodGet, ""},
 	}
 	for _, tc := range calls {
 		t.Run(tc.name+" without a token", func(t *testing.T) {
@@ -479,13 +481,15 @@ func TestProfileHandlersRefuseAnOrganizationWithoutCDS(t *testing.T) {
 	require.NoError(t, err)
 
 	for name, handler := range map[string]http.HandlerFunc{
-		"init":   env.h.InitProfile,
-		"get":    env.h.GetProfile,
-		"list":   env.h.GetAllProfiles,
-		"update": env.h.UpdateProfile,
-		"patch":  env.h.PatchProfile,
-		"delete": env.h.DeleteProfile,
-		"link":   env.h.LinkProfile,
+		"init":    env.h.InitProfile,
+		"get":     env.h.GetProfile,
+		"list":    env.h.GetAllProfiles,
+		"update":  env.h.UpdateProfile,
+		"patch":   env.h.PatchProfile,
+		"delete":  env.h.DeleteProfile,
+		"link":    env.h.LinkProfile,
+		"sources": env.h.GetProfileSources,
+		"history": env.h.GetProfileSourceHistory,
 	} {
 		t.Run(name, func(t *testing.T) {
 			recorder := env.call(t, handler, http.MethodPost, env.auth.ValidToken, "", `{}`,

@@ -55,6 +55,8 @@ func NewProfileService(mux *http.ServeMux) *ProfileService {
 	ps.mux.HandleFunc("DELETE "+base+"/profiles/{profileId}",
 		audit.Wrap(audit.ProfileDelete, ps.profileHandler.DeleteProfile))
 	ps.mux.HandleFunc("GET "+base+"/profiles/{profileId}/consents", ps.profileHandler.GetProfileConsents)
+	ps.mux.HandleFunc("GET "+base+"/profiles/{profileId}/sources", ps.profileHandler.GetProfileSources)
+	ps.mux.HandleFunc("GET "+base+"/profiles/{profileId}/sources/history", ps.profileHandler.GetProfileSourceHistory)
 	ps.mux.HandleFunc("PUT "+base+"/profiles/{profileId}/consents",
 		audit.Wrap(audit.ProfileConsentUpdate, ps.profileHandler.UpdateProfileConsents))
 
