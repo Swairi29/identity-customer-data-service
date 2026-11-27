@@ -619,6 +619,34 @@ var GetConsentCategoryAttributesByCategoryIDs = newQuery("CDS-CON-15",
 	`SELECT category_id, scope, attribute_name, attribute_id, application_identifier
 	 FROM consent_category_attributes WHERE category_id IN (%s)`)
 
+// InsertSource stores a new source.
+var InsertSource = newQuery("CDS-SRC-01",
+	`INSERT INTO sources (source_id, org_id, name, description, icon_url, created_at, updated_at)
+	 VALUES ($1, $2, $3, $4, $5, $6, $7)`)
+
+// GetSourcesByOrg returns every source of an org, newest first.
+var GetSourcesByOrg = newQuery("CDS-SRC-02",
+	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	 WHERE org_id = $1 ORDER BY created_at DESC, id DESC`)
+
+// GetSourceByID returns the source of an org with the given ID.
+var GetSourceByID = newQuery("CDS-SRC-03",
+	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	 WHERE source_id = $1 AND org_id = $2`)
+
+// GetSourceByName returns the source of an org with the given name.
+var GetSourceByName = newQuery("CDS-SRC-04",
+	`SELECT source_id, org_id, name, description, icon_url, created_at, updated_at FROM sources
+	 WHERE name = $1 AND org_id = $2`)
+
+// UpdateSourceDescription replaces the description of a source. The other fields are not editable.
+var UpdateSourceDescription = newQuery("CDS-SRC-05",
+	`UPDATE sources SET description = $1, updated_at = $2 WHERE source_id = $3 AND org_id = $4`)
+
+// DeleteSource removes the source of an org with the given ID.
+var DeleteSource = newQuery("CDS-SRC-06",
+	`DELETE FROM sources WHERE source_id = $1 AND org_id = $2`)
+
 // InsertCookie stores a new profile cookie.
 var InsertCookie = newQuery("CDS-CKI-01",
 	`INSERT INTO profile_cookies (cookie_id, profile_id, is_active) VALUES ($1, $2, $3)`)

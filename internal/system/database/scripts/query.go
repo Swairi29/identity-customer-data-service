@@ -36,6 +36,7 @@ import (
 //	CDS-PRF  profiles, profile_reference, application_data
 //	CDS-CON  consent_categories, consent_category_attributes, profile_consents
 //	CDS-CKI  profile_cookies
+//	CDS-SRC  sources
 //	CDS-CFG  cds_config
 //	CDS-SVC  org_service_credentials
 //	CDS-IDR  blocking_keys, review_tasks, rejection_pairs
