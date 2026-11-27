@@ -565,6 +565,18 @@ var (
 		Code:    errorPrefix + "15704",
 		Message: "Deleting source failed.",
 	}
+	RecordAttributeHistory = ErrorMessage{
+		Code:    errorPrefix + "15705",
+		Message: "Recording the attribute history failed.",
+	}
+	FetchAttributeHistory = ErrorMessage{
+		Code:    errorPrefix + "15706",
+		Message: "Fetching the attribute history failed.",
+	}
+	TransformSourcePayload = ErrorMessage{
+		Code:    errorPrefix + "15707",
+		Message: "Transforming the source payload failed.",
+	}
 
 	AddSourceBadRequest = ErrorMessage{
 		Code:    errorPrefix + "18001",
@@ -601,5 +613,25 @@ var (
 	SourceEmptyUpdate = ErrorMessage{
 		Code:    errorPrefix + "18009",
 		Message: "Empty update request.",
+	}
+	SourceNotRegistered = ErrorMessage{
+		Code:    errorPrefix + "18010",
+		Message: "Invalid source ID.",
+	}
+	SourceTransformationInactive = ErrorMessage{
+		Code:    errorPrefix + "18012",
+		Message: "Linked transformation is not active.",
+	}
+	SourceTransformationInvalid = ErrorMessage{
+		Code:    errorPrefix + "18013",
+		Message: "Invalid transformation ID.",
+	}
+	SourceDestinationInvalid = ErrorMessage{
+		Code:    errorPrefix + "18014",
+		Message: "Invalid destination ID.",
+	}
+	AttributeInvalid = ErrorMessage{
+		Code:    errorPrefix + "18015",
+		Message: "Invalid attribute.",
 	}
 )
